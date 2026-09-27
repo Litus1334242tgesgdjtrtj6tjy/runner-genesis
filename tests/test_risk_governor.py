@@ -67,3 +67,32 @@ def test_daily_spend_and_loss_reset_on_new_utc_day():
     assert 'MAX_DAILY_LOSS' not in next_day.reasons
     assert a.daily_spend_eur == 0
     assert a.daily_realized_pnl_eur == 0
+
+
+
+def test_drawdown_does_not_block_risk_reduction():
+    cfg = RiskConfig(
+        min_liquidity_usd=10000,
+        max_daily_loss_eur=10,
+        max_portfolio_drawdown_pct=0.10,
+        max_account_pct_per_trade=1.0,
+        max_position_eur=100,
+    )
+    g = RiskGovernor(cfg)
+    a = PaperAccount(300,300)
+    now = datetime(2026,1,1,12,tzinfo=timezone.utc)
+    a.advance_accounting_day(now)
+    a.daily_realized_pnl_eur = -20
+    a.equity_eur = 240
+    a.peak_equity_eur = 300
+    token = TokenState('M',liquidity_usd=100000)
+
+    reduction = g.evaluate(
+        TradeProposal(Action.REDUCE,'M',reduce_fraction=0.5),
+        a, token,
+        features={'sellability_score':1.0,'manipulation_risk':0.0,'entry_validity':'VALID'},
+        now=now,
+    )
+    assert reduction.approved
+    assert 'MAX_DAILY_LOSS' not in reduction.reasons
+    assert 'MAX_DRAWDOWN' not in reduction.reasons
