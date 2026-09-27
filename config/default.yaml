@@ -74,6 +74,8 @@ mirofish:
   trigger_min_accumulation: 0.20
   trigger_min_top_trader_wave: 0.20
   trigger_min_fomo: 0.30
+  min_rerun_seconds: 20
+  material_change_threshold: 0.08
 
 persistence:
   enabled: true
