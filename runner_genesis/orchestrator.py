@@ -38,6 +38,7 @@ from .execution import PaperExecutionEngine, PaperFill
 from .portfolio import PortfolioLedger
 from .db import RuntimeRepository
 from .alerts import AlertEngine
+from .paper_recovery import recover_pending_specs
 from .ingestion.gates import CandidateUniverseGate
 
 
@@ -108,6 +109,7 @@ class RunnerGenesisOmega:
         if self.repository:
             self._hydrate_research_state()
             self._hydrate_paper_portfolio()
+            self._hydrate_pending_paper()
 
     @staticmethod
     def _aware(ts: datetime) -> datetime:
@@ -192,6 +194,30 @@ class RunnerGenesisOmega:
             for mint, position in self.portfolio.account.positions.items()
         }
         self.portfolio.mark_to_market(prices)
+
+    def _hydrate_pending_paper(self) -> None:
+        if not self.repository:
+            return
+        specs = recover_pending_specs(
+            self.repository.load_paper_updates(limit=100_000),
+            self.repository.load_fills(limit=100_000),
+            float(self.settings.execution.execution_delay_seconds),
+        )
+        for spec in specs:
+            action = Action.ENTER if spec['action'] == 'ENTER' else Action.ADD
+            proposal = TradeProposal(
+                action=action,
+                token_mint=spec['token_mint'],
+                amount_eur=float(spec['amount_eur']),
+                confidence=float(spec['confidence']),
+                reasons=['RESTORED_DELAYED_PAPER_SIGNAL'],
+            )
+            self.pending_orders[spec['token_mint']] = PendingPaperOrder(
+                proposal=proposal,
+                signal_time=spec['signal_time'],
+                due_time=spec['due_time'],
+                signal_features=dict(spec['signal_features']),
+            )
 
     def _fly_embedding(self, f: dict) -> np.ndarray:
         keys = [
