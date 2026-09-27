@@ -74,6 +74,8 @@ def recover_pending_specs(
                 "fusion_confidence": payload.get("fusion_confidence"),
                 "weighted_smart_capital_consensus": payload.get("weighted_smart_capital_consensus"),
                 "top_trader_wave_score": payload.get("top_trader_wave_score"),
+                "dominant_actor_cluster_id": payload.get("dominant_actor_cluster_id"),
+                "dominant_actor_cluster_fraction": payload.get("dominant_actor_cluster_fraction"),
             },
         })
     recovered.sort(key=lambda x: (x["due_time"], x["token_mint"]))
