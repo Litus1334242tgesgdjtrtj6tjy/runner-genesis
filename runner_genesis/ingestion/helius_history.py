@@ -294,8 +294,17 @@ class WalletOutcomeBuilder:
             else:
                 if cycle is None or cycle.quote_asset != q_asset or cycle.token_bought <= 0:
                     continue
-                cycle.token_sold += min(float(e.amount_token), max(0.0, cycle.token_bought - cycle.token_sold))
-                cycle.quote_received += q_value
+                sell_amount = max(0.0, float(e.amount_token))
+                remaining = max(0.0, cycle.token_bought - cycle.token_sold)
+                matched = min(sell_amount, remaining)
+                if matched <= 0:
+                    continue
+                # A wallet can sell tokens it owned before the tracked cycle. Allocate
+                # quote proceeds only to the quantity attributable to this cycle instead
+                # of crediting the full oversized sale and manufacturing impossible ROI.
+                allocation = matched / max(sell_amount, 1e-12)
+                cycle.token_sold += matched
+                cycle.quote_received += q_value * allocation
                 if cycle.retained_fraction <= 0.02 and cycle.quote_spent > 0:
                     realized = cycle.quote_received / cycle.quote_spent - 1.0
                     outcomes.append(WalletBuyObservation(
