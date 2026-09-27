@@ -232,6 +232,15 @@ class RuntimeRepository:
             except IntegrityError:
                 s.rollback()
 
+    def load_recent_event_ids(self, limit: int = 200_000) -> list[str]:
+        with self.Session() as s:
+            rows = s.execute(
+                select(EventRow.event_id)
+                .order_by(EventRow.id.desc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            return [str(x) for x in reversed(rows)]
+
     def record_decision(self, d) -> None:
         with self.Session() as s:
             s.add(DecisionRow(timestamp=d.decision_time, token_mint=d.token_mint, action=d.action, model_version=d.model_version, snapshot_json=d.model_dump_json()))
