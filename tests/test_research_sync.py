@@ -52,3 +52,66 @@ def test_live_onchain_wallet_enters_helius_qualification_queue():
     assert rows[0]["wallet_address"] == "LIVE_WALLET"
     assert rows[0]["rank"] is None
     assert rows[0]["discovery_kind"] == "LIVE_ONCHAIN_CANDIDATE"
+
+
+
+class _FakeSmart:
+    def emerging_wallet_metrics(self, wallet, now, store):
+        if wallet == "EMERGING":
+            return {
+                "smart_capital_30d_score": 0.90,
+                "emerging_smart_wallet_score": 0.85,
+                "data_quality_score": 0.85,
+                "sample_size_30d": 18,
+            }
+        return {
+            "smart_capital_30d_score": 0.0,
+            "emerging_smart_wallet_score": 0.0,
+            "data_quality_score": 0.0,
+            "sample_size_30d": 0,
+        }
+
+
+class _FakeActor:
+    def independence_factor(self, wallet, peers):
+        return 0.95
+
+
+def test_dynamic_priority_can_choose_strong_emerging_over_weak_ranked_wallet():
+    settings = Settings(helius_api_key="test-key")
+    settings.external_discovery.wallet_priority_enabled = True
+    settings.external_discovery.wallet_priority_candidate_pool = 10
+    discovery = PumpDiscoveryEngine(PumpDiscoveryConfig())
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    discovery.ingest_leaderboard(
+        [{"wallet_address": "TOP", "rank": 50, "monthly_pnl": 100}],
+        observed_at=now,
+        source="PUMPFUN_TOP_TRADER",
+    )
+    engine = SimpleNamespace(
+        discovery=discovery,
+        smart=_FakeSmart(),
+        actor=_FakeActor(),
+        store=SimpleNamespace(wallets={}),
+    )
+    coordinator = ResearchSyncCoordinator(settings, engine)
+    selected = coordinator._priority_select(
+        {
+            "TOP": {
+                "wallet_address": "TOP",
+                "rank": 50,
+                "source_confidence": 0.9,
+                "observed_at": now,
+            },
+            "EMERGING": {
+                "wallet_address": "EMERGING",
+                "rank": None,
+                "source_confidence": 0.55,
+                "observed_at": now,
+            },
+        },
+        limit=1,
+        now=now,
+    )
+    assert selected[0]["wallet_address"] == "EMERGING"
+    assert selected[0]["wallet_discovery_priority_score"] > 0
