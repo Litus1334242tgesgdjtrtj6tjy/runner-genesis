@@ -22,3 +22,48 @@ def test_entry_executes_only_at_or_after_configured_delay(tmp_path, monkeypatch)
     assert fill is not None
     assert 'M' not in eng.pending_orders
     assert fill.timestamp >= due
+
+
+
+def test_delayed_entry_waits_for_fresh_verified_quote(tmp_path, monkeypatch):
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    settings = load_settings('config/default.yaml')
+    settings.features['database_persistence']={'enabled':False}
+    eng = RunnerGenesisOmega(settings)
+    t0 = datetime(2026,1,1,tzinfo=timezone.utc)
+    token = eng.store.apply(MarketEvent(
+        event_id='q0', timestamp=t0, token_mint='M', event_type=EventType.PRICE,
+        price_usd=1.0, market_cap_usd=100_000, liquidity_usd=100_000,
+        asset_match_verified=True,
+    ))
+    prop = TradeProposal(Action.ENTER, 'M', amount_eur=10)
+    due = t0 + timedelta(seconds=settings.execution.execution_delay_seconds)
+    eng.pending_orders['M'] = PendingPaperOrder(prop, t0, due, {})
+
+    stale_event = MarketEvent(
+        event_id='q1', timestamp=due, token_mint='M', event_type=EventType.BUY,
+        wallet='W', asset_match_verified=True,
+    )
+    fill, reasons = eng._execute_due_pending(
+        'M', due, token,
+        {'entry_validity':'VALID','sellability_score':1.0,'manipulation_risk':0.0},
+        market_event=stale_event,
+    )
+    assert fill is None
+    assert reasons == ['WAITING_FRESH_EXECUTION_QUOTE']
+    assert 'M' in eng.pending_orders
+
+    fresh_event = MarketEvent(
+        event_id='q2', timestamp=due+timedelta(seconds=1), token_mint='M',
+        event_type=EventType.PRICE, price_usd=1.1, liquidity_usd=90_000,
+        market_cap_usd=110_000, asset_match_verified=True,
+    )
+    token = eng.store.apply(fresh_event)
+    fill, reasons = eng._execute_due_pending(
+        'M', fresh_event.timestamp, token,
+        {'entry_validity':'VALID','sellability_score':1.0,'manipulation_risk':0.0},
+        market_event=fresh_event,
+    )
+    assert fill is not None
+    assert fill.reference_price == 1.1
+    assert 'M' not in eng.pending_orders
