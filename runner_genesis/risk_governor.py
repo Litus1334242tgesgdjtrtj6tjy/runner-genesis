@@ -56,6 +56,14 @@ class RiskGovernor:
                 r.append('ENTRY_TOO_LATE')
             if bool(f.get('fusion_risk_veto', False)):
                 r.append('FUSION_RISK_VETO')
+            cohort_concentration = f.get('cohort_concentration')
+            independence_ratio = f.get('independence_ratio')
+            if (
+                cohort_concentration is not None
+                and float(cohort_concentration) > self.cfg.max_correlated_exposure_pct
+                and (independence_ratio is None or float(independence_ratio) < 0.65)
+            ):
+                r.append('WALLET_CLUSTER_CONCENTRATION')
 
         if estimated_slippage_pct > self.cfg.max_slippage_pct:
             r.append('MAX_SLIPPAGE')
