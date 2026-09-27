@@ -1,10 +1,11 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 
 from .config import Settings
 from .domain.events import MarketEvent, DecisionSnapshot
+from .domain.state import WalletBuyObservation
 from .state_store import MarketStateStore, BUY_TYPES
 from .engines.capital_surprise import CapitalSurpriseEngine
 from .engines.wallet_quality import WalletQualityEngine
@@ -104,6 +105,39 @@ class RunnerGenesisOmega:
         self._persisted_transition_count = 0
         db_enabled = bool(settings.features.get('database_persistence', {}).get('enabled', True))
         self.repository = RuntimeRepository(settings.database_url) if db_enabled else None
+        if self.repository:
+            self._hydrate_research_state()
+
+    @staticmethod
+    def _aware(ts: datetime) -> datetime:
+        return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+    def _hydrate_research_state(self) -> None:
+        """Restore persistent wallet outcomes/funding evidence without replaying them as market events."""
+        if not self.repository:
+            return
+        limit = max(1, int(self.settings.helius_history.hydrate_max_rows))
+        by_wallet: dict[str, list[WalletBuyObservation]] = {}
+        for row in self.repository.load_wallet_outcomes(limit=limit):
+            obs = WalletBuyObservation(
+                event_time=self._aware(row['event_time']),
+                resolved_at=self._aware(row['resolved_at']),
+                token_mint=row['token_mint'],
+                buy_eur=float(row.get('buy_eur') or 0.0),
+                realized_return=row.get('realized_return'),
+                runner_capture_ratio=row.get('runner_capture_ratio'),
+                hold_seconds=row.get('hold_seconds'),
+            )
+            by_wallet.setdefault(row['wallet_address'], []).append(obs)
+        for wallet, observations in by_wallet.items():
+            self.store.backfill_wallet_observations(wallet, observations)
+        for row in self.repository.load_funding_relationships(limit=limit):
+            self.actor.observe_funding_link(
+                row['wallet'],
+                row['funder'],
+                self._aware(row['timestamp']),
+                float(row.get('confidence') or 0.0),
+            )
 
     def _fly_embedding(self, f: dict) -> np.ndarray:
         keys = [
