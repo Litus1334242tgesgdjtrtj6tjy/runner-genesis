@@ -127,6 +127,26 @@ class ResearchSyncCoordinator:
                     (x.last_verified or x.first_seen for x in sources if (x.last_verified or x.first_seen)),
                     default=datetime.now(timezone.utc),
                 ),
+                "discovery_kind": "SEEDED_REGISTRY",
+            }
+
+        # Helius-only mode can discover candidates organically from live Pump/PumpSwap
+        # traffic. These wallets are NOT promoted to top-trader status; they are merely
+        # queued for historical qualification so Emerging Smart Wallet can learn them.
+        for wallet, state in self.engine.store.wallets.items():
+            observed = state.last_seen or state.first_seen or datetime.now(timezone.utc)
+            current = latest.get(wallet)
+            if current is not None and current.get("observed_at") and current["observed_at"] >= observed:
+                continue
+            latest[wallet] = {
+                "wallet_address": wallet,
+                "username": None,
+                "rank": None,
+                "monthly_pnl": None,
+                "source_window": None,
+                "source_confidence": 0.55,
+                "observed_at": observed,
+                "discovery_kind": "LIVE_ONCHAIN_CANDIDATE",
             }
         return list(latest.values())
 
@@ -201,13 +221,19 @@ class ResearchSyncCoordinator:
                 )
 
         limit = int(max_wallets or self.settings.external_discovery.max_wallets_per_refresh)
-        ranked = sorted(
-            rows,
-            key=lambda x: (
-                int(x.get("rank") or 10**9),
-                -(float(x.get("monthly_pnl") or 0.0)),
-            ),
-        )[: max(0, limit)]
+        def _row_priority(row: dict[str, Any]):
+            rank = row.get("rank")
+            ranked_flag = 0 if rank is not None else 1
+            rank_value = int(rank) if rank is not None else 10**9
+            pnl_value = -(float(row.get("monthly_pnl") or 0.0))
+            observed = row.get("observed_at")
+            if isinstance(observed, datetime):
+                observed_ts = observed.timestamp()
+            else:
+                observed_ts = 0.0
+            return (ranked_flag, rank_value, pnl_value, -observed_ts)
+
+        ranked = sorted(rows, key=_row_priority)[: max(0, limit)]
 
         backfills = []
         skipped_recent = 0
