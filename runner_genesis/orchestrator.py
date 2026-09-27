@@ -158,6 +158,15 @@ class RunnerGenesisOmega:
                 source=str(row.get('source') or 'PUMP_OFFICIAL'),
             )
 
+        for row in self.repository.load_latest_wallet_positions(limit=limit):
+            self.smart.restore_position_snapshot(
+                str(row['wallet_address']),
+                str(row['token_mint']),
+                dict(row.get('payload') or {}),
+            )
+        for row in self.repository.load_latest_smart_states(limit=limit):
+            self.smart.restore_token_state(str(row['token_mint']), row.get('state'))
+
     def _hydrate_paper_portfolio(self) -> None:
         """Replay persisted PAPER fills so process restarts do not reset cash/positions."""
         if not self.repository:
