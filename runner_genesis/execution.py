@@ -27,6 +27,7 @@ class PaperFill:
     fee_source: str = 'CONFIG_FALLBACK'
     fee_schedule_version: str | None = None
     fee_confidence: float = 0.0
+    network_fee_eur: float = 0.0
 
 class PaperExecutionEngine:
     def __init__(self,cfg,seed:int=20260924):
@@ -42,6 +43,22 @@ class PaperExecutionEngine:
         liq=max(liquidity_usd,1.0)
         return self.cfg.base_slippage_bps/10000.0 + self.cfg.mev_adverse_bps/10000.0 + self.cfg.impact_coefficient*(amount_eur/liq)
 
+    def _network_fee_eur(self, token: TokenState) -> float:
+        meta=dict(token.metadata or {})
+        if token.events:
+            meta.update({k:v for k,v in (getattr(token.events[-1],'metadata',{}) or {}).items() if v is not None})
+        try:
+            sol_usd=float(meta.get('sol_usd')) if meta.get('sol_usd') is not None else None
+        except (TypeError,ValueError):
+            sol_usd=None
+        if not sol_usd or sol_usd<=0:
+            return 0.0
+        lamports=(
+            max(0,int(self.cfg.network_base_fee_lamports))*max(1,int(self.cfg.network_signature_count))
+            + max(0,int(self.cfg.network_priority_fee_lamports))
+        )
+        return float(lamports)*1e-9*sol_usd
+
     def execute(self,p:TradeProposal,token:TokenState,now:datetime,position_quantity:float=0.0)->PaperFill|None:
         if p.action not in (Action.ENTER,Action.ADD,Action.PROTECT,Action.PARTIAL_EXIT,Action.REDUCE,Action.EXIT,Action.KEEP_RUNNER_BAG): return None
         price=float(token.price_usd or 0.0); liq=float(token.liquidity_usd or 0.0)
@@ -53,8 +70,13 @@ class PaperExecutionEngine:
         failed=bool(rng.random()<fail_p)
         side='BUY' if p.action in (Action.ENTER,Action.ADD) else 'SELL'
         requested=float(p.amount_eur) if side=='BUY' else max(0.0,position_quantity*price*float(p.reduce_fraction or 1.0))
+        network_fee=self._network_fee_eur(token)
         if failed:
-            return PaperFill(p.token_mint,side,requested,0,0,price,price,0,0,latency,True,False,now+timedelta(milliseconds=latency),'SIMULATED_TX_FAILURE')
+            return PaperFill(
+                p.token_mint,side,requested,0,0,price,price,0,network_fee,latency,
+                True,False,now+timedelta(milliseconds=latency),'SIMULATED_TX_FAILURE',
+                None,'NETWORK_ONLY_FAILED_TX',None,0.8 if network_fee>0 else 0.0,network_fee,
+            )
         max_fill=max(0.0,liq*self.cfg.max_liquidity_fraction)
         filled=min(requested,max_fill) if self.cfg.partial_fill_enabled else requested
         partial=filled+1e-12<requested
@@ -64,10 +86,11 @@ class PaperExecutionEngine:
         fee_quote=self.pump_fees.quote(token)
         protocol_fee_bps=float(fee_quote.protocol_fee_bps) if fee_quote.protocol_fee_bps is not None else float(self.cfg.base_fee_bps)
         fee_rate=(protocol_fee_bps+float(self.cfg.priority_fee_bps))/10000.0
-        fees=filled*fee_rate
+        fees=filled*fee_rate+network_fee
         qty=filled/max(exec_price,1e-12)
         return PaperFill(
             p.token_mint,side,requested,filled,qty,price,exec_price,slip,fees,latency,
             False,partial,now+timedelta(milliseconds=latency),'',
             protocol_fee_bps,fee_quote.source,fee_quote.schedule_version,fee_quote.confidence,
+            network_fee,
         )
