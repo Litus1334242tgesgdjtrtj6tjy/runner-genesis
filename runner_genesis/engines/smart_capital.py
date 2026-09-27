@@ -460,6 +460,7 @@ class SmartCapitalEngine:
         contributions = []
         capitals = []
         qualities = []
+        strategies = []
         swings = []
         holds = []
         accumulations = []
@@ -485,6 +486,7 @@ class SmartCapitalEngine:
             capital = max(p.current_exposure_usd, 1.0)
             capitals.append(capital)
             qualities.append(q.quality)
+            strategies.append(strategy)
             swings.append(1.0 if style == "SWING" else 0.75 if style in {"HOLDER", "RUNNER"} else 0.25)
             holds.append(_clip(q.median_winner_hold_seconds / (6 * 3600)) if q.sample_size else (0.8 if style == "HOLDER" else 0.5 if style == "SWING" else 0.2))
             accumulations.append(accum)
@@ -503,6 +505,7 @@ class SmartCapitalEngine:
         accumulation = sum(accumulations) / max(len(accumulations), 1)
         conviction = sum(convictions) / max(len(convictions), 1)
         avg_quality = sum(qualities) / max(len(qualities), 1)
+        avg_strategy = sum(strategies) / max(len(strategies), 1)
         avg_swing = sum(swings) / max(len(swings), 1)
         avg_hold = sum(holds) / max(len(holds), 1)
         smart_entry_price = price_num / price_den if price_den else None
@@ -524,7 +527,14 @@ class SmartCapitalEngine:
         ]
         data_quality = sum(known) / len(known)
 
-        signal_valid = consensus >= float(self.cfg.min_consensus) and eff >= float(self.cfg.min_effective_wallets) and accumulation >= float(self.cfg.min_accumulation)
+        signal_valid = (
+            consensus >= float(self.cfg.min_consensus)
+            and eff >= float(self.cfg.min_effective_wallets)
+            and accumulation >= float(self.cfg.min_accumulation)
+            and conviction >= float(self.cfg.min_conviction)
+            and avg_quality >= float(self.cfg.min_wallet_quality)
+            and avg_strategy >= float(self.cfg.min_strategy_match)
+        )
         if entry_distance_price is None:
             entry_validity = "WAITING_DATA"
         elif entry_distance_price > float(self.cfg.max_entry_distance_price):
@@ -566,6 +576,7 @@ class SmartCapitalEngine:
             "accumulation_score": accumulation,
             "conviction_score": conviction,
             "average_wallet_quality": avg_quality,
+            "average_strategy_match": avg_strategy,
             "average_swing_score": avg_swing,
             "average_hold_score": avg_hold,
             "smart_average_entry_price": smart_entry_price,
