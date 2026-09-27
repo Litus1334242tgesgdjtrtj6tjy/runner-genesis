@@ -357,12 +357,58 @@ def _purge_before_boundary(frame: pd.DataFrame, boundary: pd.Timestamp) -> pd.Da
     return frame.loc[frame["label_available_at"] < boundary].copy()
 
 
+def _expected_calibration_error(y: np.ndarray, p: np.ndarray, bins: int = 10) -> float:
+    y = np.asarray(y, dtype=float)
+    p = np.asarray(p, dtype=float)
+    if len(y) == 0:
+        return 0.0
+    edges = np.linspace(0.0, 1.0, max(2, int(bins)) + 1)
+    error = 0.0
+    for i in range(len(edges) - 1):
+        lo, hi = edges[i], edges[i + 1]
+        if i == len(edges) - 2:
+            mask = (p >= lo) & (p <= hi)
+        else:
+            mask = (p >= lo) & (p < hi)
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        error += (n / len(y)) * abs(float(p[mask].mean()) - float(y[mask].mean()))
+    return float(error)
+
+
 def _safe_metric(y: np.ndarray, p: np.ndarray) -> dict[str, float | None]:
+    y = np.asarray(y, dtype=int)
+    p = np.clip(np.asarray(p, dtype=float), 1e-9, 1 - 1e-9)
+    pred = p >= 0.5
+    tp = int(((pred == 1) & (y == 1)).sum())
+    fp = int(((pred == 1) & (y == 0)).sum())
+    fn = int(((pred == 0) & (y == 1)).sum())
+    tn = int(((pred == 0) & (y == 0)).sum())
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+
+    top_n = max(1, int(np.ceil(len(y) * 0.10))) if len(y) else 0
+    precision_at_10pct = None
+    if top_n:
+        order = np.argsort(-p)[:top_n]
+        precision_at_10pct = float(y[order].mean())
+
     out: dict[str, float | None] = {
         "brier": float(brier_score_loss(y, p)),
         "log_loss": float(log_loss(y, np.column_stack([1 - p, p]), labels=[0, 1])),
         "roc_auc": None,
         "pr_auc": None,
+        "precision_0_5": float(precision),
+        "recall_0_5": float(recall),
+        "f1_0_5": float(f1),
+        "precision_at_10pct": precision_at_10pct,
+        "ece_10bin": _expected_calibration_error(y, p, bins=10),
+        "true_positive": float(tp),
+        "false_positive": float(fp),
+        "false_negative": float(fn),
+        "true_negative": float(tn),
     }
     if len(np.unique(y)) >= 2:
         out["roc_auc"] = float(roc_auc_score(y, p))
