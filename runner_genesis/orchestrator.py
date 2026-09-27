@@ -107,6 +107,7 @@ class RunnerGenesisOmega:
         self.repository = RuntimeRepository(settings.database_url) if db_enabled else None
         if self.repository:
             self._hydrate_research_state()
+            self._hydrate_paper_portfolio()
 
     @staticmethod
     def _aware(ts: datetime) -> datetime:
@@ -154,6 +155,43 @@ class RunnerGenesisOmega:
                 observed_at=observed_at,
                 source=str(row.get('source') or 'PUMP_OFFICIAL'),
             )
+
+    def _hydrate_paper_portfolio(self) -> None:
+        """Replay persisted PAPER fills so process restarts do not reset cash/positions."""
+        if not self.repository:
+            return
+        for row in self.repository.load_fills(limit=100_000):
+            ts = row.get('timestamp')
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            if not isinstance(ts, datetime):
+                continue
+            ts = self._aware(ts)
+            try:
+                fill = PaperFill(
+                    token_mint=str(row['token_mint']),
+                    side=str(row.get('side') or 'NA'),
+                    requested_eur=float(row.get('requested_eur') or row.get('filled_eur') or 0.0),
+                    filled_eur=float(row.get('filled_eur') or 0.0),
+                    quantity=float(row.get('quantity') or 0.0),
+                    reference_price=float(row.get('reference_price') or row.get('execution_price') or 0.0),
+                    execution_price=float(row.get('execution_price') or 0.0),
+                    slippage_pct=float(row.get('slippage_pct') or 0.0),
+                    fees_eur=float(row.get('fees_eur') or 0.0),
+                    latency_ms=float(row.get('latency_ms') or 0.0),
+                    failed=bool(row.get('failed', False)),
+                    partial=bool(row.get('partial', False)),
+                    timestamp=ts,
+                    reason=str(row.get('reason') or ''),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            self.portfolio.apply_fill(fill)
+        prices = {
+            mint: position.avg_entry_price
+            for mint, position in self.portfolio.account.positions.items()
+        }
+        self.portfolio.mark_to_market(prices)
 
     def _fly_embedding(self, f: dict) -> np.ndarray:
         keys = [
