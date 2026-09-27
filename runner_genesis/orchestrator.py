@@ -122,6 +122,49 @@ class RunnerGenesisOmega:
     def _aware(ts: datetime) -> datetime:
         return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
 
+    def _hydrate_processed_event_ids(self) -> None:
+        if not self.repository:
+            return
+        for event_id in self.repository.load_recent_event_ids(limit=self._max_processed_event_ids):
+            if event_id in self._processed_event_ids:
+                continue
+            self._processed_event_ids.add(event_id)
+            self._processed_event_order.append(event_id)
+
+    def _remember_event_result(self, event_id: str | None, result: ProcessResult) -> None:
+        if not event_id:
+            return
+        if event_id not in self._processed_event_ids:
+            self._processed_event_ids.add(event_id)
+            self._processed_event_order.append(event_id)
+        self._event_result_cache[event_id] = result
+        self._event_result_order.append(event_id)
+        while len(self._processed_event_order) > self._max_processed_event_ids:
+            expired = self._processed_event_order.popleft()
+            self._processed_event_ids.discard(expired)
+            self._event_result_cache.pop(expired, None)
+        while len(self._event_result_order) > 10_000:
+            expired = self._event_result_order.popleft()
+            if expired not in self._event_result_order:
+                self._event_result_cache.pop(expired, None)
+
+    def _duplicate_result(self, e: MarketEvent) -> ProcessResult:
+        cached = self._event_result_cache.get(e.event_id)
+        if cached is not None:
+            return cached
+        snapshot = DecisionSnapshot(
+            decision_time=e.timestamp,
+            token_mint=e.token_mint,
+            model_version=self.genesis.model_version,
+            data_available_until=e.timestamp,
+            features={'event_status':'DUPLICATE_IGNORED'},
+            probabilities={'genesis_prob':None},
+            action='DUPLICATE_IGNORED',
+            reasons=['DUPLICATE_EVENT_ID'],
+            risks=[],
+        )
+        return ProcessResult(snapshot, None, False, ['DUPLICATE_EVENT_ID'])
+
     def _hydrate_research_state(self) -> None:
         """Restore persistent wallet outcomes/funding evidence without replaying them as market events."""
         if not self.repository:
