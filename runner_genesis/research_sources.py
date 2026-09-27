@@ -61,9 +61,16 @@ class WalletResearchBackfillService:
     wallet-fetch order from manufacturing/coarsening co-buy relationships.
     """
 
-    def __init__(self, client: HeliusWalletHistoryClient, repository=None) -> None:
+    def __init__(
+        self,
+        client: HeliusWalletHistoryClient,
+        repository=None,
+        *,
+        min_funding_sol: float = 0.01,
+    ) -> None:
         self.client = client
         self.repository = repository
+        self.min_funding_sol = max(0.0, float(min_funding_sol))
         self.normalizer = EnhancedWalletHistoryNormalizer()
         self.outcomes = WalletOutcomeBuilder()
 
@@ -73,7 +80,7 @@ class WalletResearchBackfillService:
         funding = []
         for tx in txs:
             events.extend(self.normalizer.normalize_swap(wallet, tx))
-            funding.extend(self.normalizer.funding_links(wallet, tx))
+            funding.extend(self.normalizer.funding_links(wallet, tx, min_sol=self.min_funding_sol))
         events.sort(key=lambda x: x.timestamp)
         funding.sort(key=lambda x: x.timestamp)
         resolved = self.outcomes.build(events)
@@ -95,8 +102,11 @@ class WalletResearchBackfillService:
         apply_funding: bool = True,
     ) -> BackfillResult:
         if apply_actor_events:
-            for event in bundle.events:
-                actor.observe(event)
+            if hasattr(actor, "observe_historical_batch"):
+                actor.observe_historical_batch(bundle.events)
+            else:
+                for event in bundle.events:
+                    actor.observe(event)
         if apply_funding:
             for link in bundle.funding_links:
                 actor.observe_funding_link(link.wallet, link.funder, link.timestamp, link.confidence)
