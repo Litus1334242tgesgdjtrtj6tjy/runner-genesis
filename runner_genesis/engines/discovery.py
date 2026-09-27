@@ -146,32 +146,72 @@ class PumpDiscoveryEngine:
             "pump_rank_acceleration": float(self._acceleration.get(key, 0.0)),
         }
 
-    def token_wave_features(self, wallets: list[str], as_of: datetime) -> dict[str, float]:
+    def token_wave_features(self, wallets: list[str], as_of: datetime, actor=None, events: list[Any] | None = None) -> dict[str, float]:
         if not wallets:
             return {
                 "top_trader_present": 0.0,
                 "top_trader_count": 0.0,
+                "top_trader_effective_count": 0.0,
+                "top_trader_independence_ratio": 0.0,
                 "kol_count": 0.0,
+                "kol_effective_count": 0.0,
+                "new_top_traders_30s": 0.0,
+                "new_top_traders_60s": 0.0,
                 "top_trader_wave_score": 0.0,
                 "kol_wave_score": 0.0,
             }
-        top_count = 0
-        kol_count = 0
+        top_wallets: list[str] = []
+        kol_wallets: list[str] = []
         vel = []
         for w in set(wallets):
             ctx = self.wallet_context(w, as_of)
-            top_count += int(float(ctx.get("pump_top_trader_present") or 0) > 0)
-            kol_count += int(float(ctx.get("kol_present") or 0) > 0)
+            if float(ctx.get("pump_top_trader_present") or 0) > 0:
+                top_wallets.append(w)
+            if float(ctx.get("kol_present") or 0) > 0:
+                kol_wallets.append(w)
             vel.append(max(0.0, float(ctx.get("pump_rank_velocity") or 0.0)))
-        breadth = min(1.0, top_count / 4.0)
-        k_breadth = min(1.0, kol_count / 3.0)
+
+        top_count = len(top_wallets)
+        kol_count = len(kol_wallets)
+        top_eff = float(actor.effective_wallet_count(top_wallets)) if actor is not None and top_wallets else float(top_count)
+        kol_eff = float(actor.effective_wallet_count(kol_wallets)) if actor is not None and kol_wallets else float(kol_count)
+        top_ind = top_eff / top_count if top_count else 0.0
+
+        new30: set[str] = set()
+        new60: set[str] = set()
+        if events:
+            top_set = set(top_wallets)
+            for ev in events:
+                wallet = getattr(ev, "wallet", None)
+                ts = getattr(ev, "timestamp", None)
+                et = getattr(ev, "event_type", None)
+                if wallet not in top_set or ts is None:
+                    continue
+                # Any explicit BUY-like event in the trailing window counts once per wallet.
+                etv = getattr(et, "value", str(et))
+                if etv not in {"BUY", "RUNNER_HOLDER_ENTRY", "RUNNER_HOLDER_ADD", "SMART_WALLET_NEW_ENTRY", "SMART_WALLET_ADD"}:
+                    continue
+                age = (as_of - ts).total_seconds()
+                if 0 <= age <= 60:
+                    new60.add(wallet)
+                    if age <= 30:
+                        new30.add(wallet)
+
+        breadth = min(1.0, top_eff / 4.0)
+        k_breadth = min(1.0, kol_eff / 3.0)
         speed = min(1.0, sum(vel) / max(len(vel), 1) / 10.0)
+        arrival = min(1.0, len(new60) / 3.0)
         return {
             "top_trader_present": 1.0 if top_count else 0.0,
             "top_trader_count": float(top_count),
+            "top_trader_effective_count": top_eff,
+            "top_trader_independence_ratio": top_ind,
             "kol_count": float(kol_count),
-            "top_trader_wave_score": max(0.0, min(1.0, 0.70 * breadth + 0.30 * speed)),
-            "kol_wave_score": k_breadth,
+            "kol_effective_count": kol_eff,
+            "new_top_traders_30s": float(len(new30)),
+            "new_top_traders_60s": float(len(new60)),
+            "top_trader_wave_score": max(0.0, min(1.0, 0.55 * breadth + 0.25 * arrival + 0.20 * speed)),
+            "kol_wave_score": max(0.0, min(1.0, 0.75 * k_breadth + 0.25 * top_ind)),
         }
 
     def latest_snapshots(self, limit: int = 100) -> list[dict[str, Any]]:
