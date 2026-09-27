@@ -3,6 +3,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from itertools import combinations
 import math
+import hashlib
 import networkx as nx
 from ..domain.events import MarketEvent, EventType
 
@@ -279,7 +280,7 @@ class ActorGraphEngine:
             "same_funder_concentration_raw": float(raw_funder),
         }
 
-    def token_cluster_features(self, token_mint: str, as_of: datetime | None = None) -> dict[str, float]:
+    def token_cluster_features(self, token_mint: str, as_of: datetime | None = None) -> dict[str, float | str | None]:
         arr = self.recent_by_token.get(token_mint, [])
         if as_of is not None:
             cutoff = as_of - self.coevent_window
@@ -287,18 +288,60 @@ class ActorGraphEngine:
         wallets = [e.wallet for e in arr if e.wallet]
         unique = list(dict.fromkeys(wallets))
         cohort = self.cohort_features(unique)
+
+        dominant_id = None
+        dominant_fraction = 0.0
+        dominant_size = 0.0
+
+        if len(unique) >= 2:
+            strong = self.graph.subgraph(unique).copy()
+            strong.remove_edges_from([
+                (a, b)
+                for a, b, data in strong.edges(data=True)
+                if float(data.get("confidence", 0.0) or 0.0) < 0.55
+            ])
+            components = [
+                sorted(component)
+                for component in nx.connected_components(strong)
+                if len(component) >= 2
+            ]
+            if components:
+                components.sort(
+                    key=lambda members: (
+                        len(members),
+                        sum(
+                            self.link_confidence(a, b)
+                            for a, b in combinations(members, 2)
+                        ),
+                    ),
+                    reverse=True,
+                )
+                dominant = components[0]
+                dominant_size = float(len(dominant))
+                dominant_fraction = dominant_size / len(unique)
+                fingerprint = hashlib.sha256("|".join(dominant).encode()).hexdigest()[:16]
+                dominant_id = f"actor-cluster:{fingerprint}"
+
         if len(unique) < 2:
             return {
                 "cluster_density": 0.0,
                 "cluster_mean_confidence": 0.0,
                 "cluster_size": float(len(unique)),
+                "dominant_actor_cluster_id": None,
+                "dominant_actor_cluster_size": 0.0,
+                "dominant_actor_cluster_fraction": 0.0,
                 **cohort,
             }
+
         sub = self.graph.subgraph(unique)
         confs = [float(d.get("confidence", 0)) for _, _, d in sub.edges(data=True)]
         return {
             "cluster_density": float(nx.density(sub)) if len(sub) > 1 else 0.0,
             "cluster_mean_confidence": float(sum(confs) / len(confs)) if confs else 0.0,
             "cluster_size": float(len(unique)),
+            "dominant_actor_cluster_id": dominant_id,
+            "dominant_actor_cluster_size": dominant_size,
+            "dominant_actor_cluster_fraction": dominant_fraction,
             **cohort,
         }
+
