@@ -127,4 +127,6 @@ helius_history:
 
 external_discovery:
   fomoscan_enabled: false
+  auto_refresh: false
   refresh_seconds: 300
+  max_wallets_per_refresh: 25
