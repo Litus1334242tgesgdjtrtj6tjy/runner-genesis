@@ -101,3 +101,30 @@ def test_true_smart_capital_30d_uses_only_resolved_window_for_window_stats():
     emerg = smart.emerging_wallet_metrics(wallet, now, store)
     assert emerg['recent_sample_size_7d'] == 6
     assert 0 <= emerg['emerging_smart_wallet_score'] <= 1
+
+
+def test_consensus_alone_does_not_bypass_conviction_gate():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cfg = SmartCapitalConfig(min_conviction=0.90)
+    store = MarketStateStore(); actor = ActorGraphEngine(); q = WalletQualityEngine()
+    smart = SmartCapitalEngine(cfg, q, PumpDiscoveryEngine(PumpDiscoveryConfig()))
+    for w in ['A', 'B', 'C']:
+        for j in range(30):
+            store.resolve_wallet_observation(w, WalletBuyObservation(
+                event_time=t0-timedelta(days=30+j),
+                resolved_at=t0-timedelta(days=1),
+                token_mint=f'OLD{w}{j}',
+                buy_eur=100,
+                entry_mc=50_000,
+                realized_return=1.2,
+                runner_capture_ratio=0.7,
+                hold_seconds=7200,
+            ))
+        e = ev(f'b{w}', t0+timedelta(minutes=2), wallet=w, usd=10, price=1.0)
+        store.apply(e); actor.observe(e); smart.observe(e)
+    px = ev('px2', t0+timedelta(hours=2), wallet=None, typ=EventType.PRICE, usd=0, price=1.1, mc=110_000)
+    store.apply(px)
+    features = smart.token_features('MINT', px.timestamp, store, actor)
+    assert features['weighted_smart_capital_consensus'] > 0
+    assert features['conviction_score'] < 0.90
+    assert features['signal_validity'] == 'NOT_CONFIRMED'
