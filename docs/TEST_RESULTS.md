@@ -1,61 +1,38 @@
 # Test Results
 
 LATEST VERIFIED CODE CHECKPOINT:
-48f3f57b54914ca545debf7201e32b8e0a8de960
+cf1cdc51e83922a057350bac65703fda6cb6572f
 
-GitHub Actions:
-- Python pytest: **53 passed**
-- Frontend production build: **success**
+GitHub Actions run 153:
+- Python pytest: **68 passed in 5.17s**
 - Demo backtest smoke: **success**
 - Component ablation smoke: **success**
+- Frontend production build: **success**
 
-Latest demo backtest output:
-- events: 35
-- decisions: 35
-- fills: 0
-- ending equity: €300
-- net PnL: €0
-- max drawdown: 0
+Coverage includes:
+- exact candidate gate and point-in-time behavior;
+- conservative Helius swap/transfer normalization;
+- creation vs migration;
+- swap proceeds excluded from funding evidence;
+- wallet history reconstruction and no-future-leakage;
+- Smart Capital position/add/reduce/exit, accumulation, conviction, strategy and entry distance;
+- 30-day Smart Capital / emerging wallets;
+- restart hydration for wallet outcomes, funding evidence, Pump snapshots, Smart Capital positions/state, PAPER fills and delayed signals;
+- Pump snapshot freshness and top-wallet wave independence;
+- actor/cohort effective wallet count, service-funder downweighting, stale co-buy expiry and 1000-wallet sparse behavior;
+- weighted community splitting for bridged wallet groups;
+- Launch Integrity;
+- FOMO dedupe and point-in-time filtering;
+- FlyWire preprocessing and per-token state isolation;
+- deterministic/gated MiroFish rollouts including independent-breadth and coordinated-clan inputs;
+- Multi-Brain Fusion;
+- PAPER-only untrained research entry gating;
+- Risk Governor and correlated-cluster veto;
+- T+60 delayed PAPER entry;
+- current Pump protocol fee tiering;
+- Solana network fee accounting, including failed PAPER transactions;
+- executable closed-trade metrics and executable-runner future labels;
+- calibrated chronological Genesis training and expanding walk-forward evaluation;
+- safe component-ablation configurations.
 
-The absence of fills is expected for this small demo because the stricter Smart Capital confirmation requires quality, strategy, conviction, accumulation and independent breadth.
-
-Coverage now includes:
-- exact candidate gate / point-in-time behavior
-- Capital Surprise
-- paper execution / T+60 delayed entry
-- Risk Governor and correlated cohort veto
-- FlyWire preprocessing
-- Smart Capital position reconstruction
-- TRANSFER != SELL
-- accumulation / conviction / entry distance
-- 30-day Smart Capital windows / emerging wallets
-- same-funder independence / effective wallet count
-- Pump top-wallet wave independence
-- Launch Integrity
-- FOMO point-in-time filtering
-- deterministic and low-signal-gated MiroFish rollouts
-- Multi-Brain Fusion
-- PAPER-only untrained research entry gating
-- Helius history BUY/SELL normalization
-- ambiguous token-token refusal
-- wallet outcome reconstruction
-- cohort discovery
-- wallet backfill dedupe/no-future-leakage
-- persisted wallet/funding research hydration after restart
-- executable closed-trade metric reconstruction
-- safe ablation configurations
-
-
-Additional coverage added after the earlier checkpoint includes:
-- FlyWire state isolation per token
-- Pump snapshot freshness and future-leakage prevention
-- shared-funder service-hub downweighting/scalability
-- swap-proceeds exclusion from funding evidence
-- token creation vs migration normalization
-- Helius-only research refresh
-- FOMO callout deduplication
-- daily paper accounting reset
-- PAPER portfolio restoration after restart
-- executable-runner future labels
-- chronological calibrated Genesis training
-- expanding walk-forward evaluation
+Current demo backtest remains intentionally non-diagnostic for profitability because it contains only a very small synthetic/replay sample.
