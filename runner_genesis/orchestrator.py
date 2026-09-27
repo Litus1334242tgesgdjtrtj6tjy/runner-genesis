@@ -316,7 +316,7 @@ class RunnerGenesisOmega:
         sequence = self.sequence.observe_and_features(e)
         self.smart.observe(e)
 
-        cluster = self.actor.token_cluster_features(e.token_mint)
+        cluster = self.actor.token_cluster_features(e.token_mint, e.timestamp)
         tq = self.token_quality.features(token)
         accel = self.market.features(token, e.timestamp)
         mark = max(0.1, 1.0 + 2.0 * cs.capital_surprise + 1.5 * wq.quality)
