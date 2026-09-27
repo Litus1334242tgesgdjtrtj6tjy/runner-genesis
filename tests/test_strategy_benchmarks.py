@@ -7,11 +7,13 @@ from runner_genesis.strategy_benchmarks import benchmark_entry_strategies
 
 
 def _row(t, mint, runner, mfe, **kwargs):
+    fixed_exit = kwargs.pop("fixed_exit_net_return_60m", None)
     row = {
         "decision_time": t,
         "token_mint": mint,
         "y_executable_runner": int(runner),
         "mfe_net_return_60m": mfe,
+        "fixed_exit_net_return_60m": fixed_exit,
         "y_x2_60m": int(mfe >= 1.0),
         "y_x3_60m": int(mfe >= 2.0),
         "y_x5_60m": int(mfe >= 4.0),
@@ -47,6 +49,7 @@ def test_a_to_g_entry_benchmarks_are_first_signal_per_token(tmp_path):
             effective_wallet_count=2.0, entry_distance_price=0.20,
             signal_validity_is_valid=1.0, entry_validity_is_valid=1.0,
             fusion_research_score=0.75, expected_executable_edge=0.08,
+            fixed_exit_net_return_60m=0.40,
         ),
         # Later duplicate qualifying row must not become a second signal.
         _row(
@@ -65,6 +68,7 @@ def test_a_to_g_entry_benchmarks_are_first_signal_per_token(tmp_path):
             accumulation_score=0.20,
             effective_wallet_count=1.5,
             entry_distance_price=0.10,
+            fixed_exit_net_return_60m=-0.20,
         ),
     ]
     path = tmp_path / "bench.csv"
@@ -81,6 +85,9 @@ def test_a_to_g_entry_benchmarks_are_first_signal_per_token(tmp_path):
     assert variants["F_PLUS_ENTRY_DISTANCE"]["signals"] == 1
     assert variants["G_FULL"]["signals"] == 1
     assert variants["G_FULL"]["precision_executable_runner"] == 1.0
+    assert variants["G_FULL"]["common_exit_60m_trades"] == 1
+    assert variants["G_FULL"]["common_exit_60m_win_rate"] == 1.0
+    assert variants["G_FULL"]["common_exit_60m_mean_return"] == 0.40
     assert report["realized_pnl_claim"] is False
 
 
