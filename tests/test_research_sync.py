@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -115,3 +116,42 @@ def test_dynamic_priority_can_choose_strong_emerging_over_weak_ranked_wallet():
     )
     assert selected[0]["wallet_address"] == "EMERGING"
     assert selected[0]["wallet_discovery_priority_score"] > 0
+
+
+
+class _BrokenFomoProvider:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def pump_leaderboard(self):
+        raise RuntimeError("provider unavailable")
+
+
+@pytest.mark.asyncio
+async def test_fomoscan_failure_falls_back_to_registry_without_stopping_research(monkeypatch):
+    settings = Settings(fomoscan_api_key="test-key")
+    settings.helius_history.enabled = False
+    settings.external_discovery.fomoscan_enabled = True
+    settings.external_discovery.wallet_priority_enabled = False
+    discovery = PumpDiscoveryEngine(PumpDiscoveryConfig())
+    now = datetime.now(timezone.utc)
+    discovery.ingest_leaderboard(
+        [{"wallet_address": "W1", "rank": 4, "monthly_pnl": 500}],
+        observed_at=now,
+        source="PUMPFUN_TOP_TRADER",
+    )
+    engine = SimpleNamespace(
+        discovery=discovery,
+        repository=None,
+        store=SimpleNamespace(wallets={}),
+    )
+    monkeypatch.setattr(
+        "runner_genesis.research_sync.FomoScanPumpProvider",
+        _BrokenFomoProvider,
+    )
+    coordinator = ResearchSyncCoordinator(settings, engine)
+    result = await coordinator.sync_once(max_wallets=1)
+    assert result["status"] == "OK"
+    assert result["discovery_source"] == "FOMOSCAN_ERROR_FALLBACK_REGISTRY"
+    assert result["external_discovery_error"]["error"] == "RuntimeError"
+    assert result["selected_for_backfill"] == 1
