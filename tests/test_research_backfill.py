@@ -172,3 +172,18 @@ def test_onchain_normalizer_separates_creation_and_migration():
     assert created[0].event_type == EventType.TOKEN_CREATED
     assert migrated[0].event_type == EventType.MIGRATION
     assert migrated[0].metadata["program_id"] == "PUMPSWAP_PROGRAM"
+
+
+def test_wallet_outcome_does_not_credit_untracked_oversell_proceeds():
+    t0 = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
+    events = [
+        MarketEvent(event_id='cycle-buy', timestamp=t0, token_mint=MINT, wallet=WALLET,
+                    event_type=EventType.BUY, amount_token=100.0, sol_value=1.0,
+                    metadata={'quote_asset':'SOL','quote_value':1.0}),
+        MarketEvent(event_id='cycle-sell', timestamp=t0+timedelta(minutes=10), token_mint=MINT, wallet=WALLET,
+                    event_type=EventType.SELL, amount_token=200.0, sol_value=4.0,
+                    metadata={'quote_asset':'SOL','quote_value':4.0}),
+    ]
+    outcomes = WalletOutcomeBuilder().build(events)
+    assert len(outcomes) == 1
+    assert abs(outcomes[0].realized_return - 1.0) < 1e-12
