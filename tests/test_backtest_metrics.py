@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 
-from runner_genesis.backtest import _closed_trade_results
+from runner_genesis.backtest import _closed_trade_results, _closed_trade_details
 from runner_genesis.execution import PaperFill
 
 
@@ -39,3 +39,17 @@ def test_open_cycle_is_not_counted_as_closed_trade():
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
     results = _closed_trade_results([fill("BUY", 100.0, 100.0, 1.0, 1.0, t0)])
     assert results == []
+
+
+
+def test_closed_trade_details_include_hold_time_and_token():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fills = [
+        fill("BUY", 100.0, 100.0, 1.0, 0.0, t0),
+        fill("SELL", 150.0, 100.0, 1.5, 0.0, t0 + timedelta(minutes=15)),
+    ]
+    details = _closed_trade_details(fills)
+    assert len(details) == 1
+    assert details[0]["token_mint"] == "M"
+    assert details[0]["hold_seconds"] == 900
+    assert abs(details[0]["return_fraction"] - 0.5) < 1e-12
