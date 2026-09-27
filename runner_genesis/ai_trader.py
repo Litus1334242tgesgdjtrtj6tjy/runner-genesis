@@ -31,8 +31,12 @@ class TradeProposal:
 class AIPaperTrader:
     """Transparent paper policy. Risk Governor remains the higher authority."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, paper_only: bool = True):
         self.cfg = cfg
+        self.paper_only = bool(paper_only)
+
+    def _untrained_entry_allowed(self) -> bool:
+        return bool(self.paper_only and getattr(self.cfg, 'allow_untrained_paper_entry', False))
 
     def decide(self, mint: str, features: dict, probs: dict, alpha: dict, persistence: dict, has_position: bool, current_cost: float = 0.0, adds: int = 0) -> TradeProposal:
         calibrated = probs.get('genesis_prob') is not None
@@ -79,7 +83,7 @@ class AIPaperTrader:
                 return TradeProposal(Action.PASS, mint, confidence=decision_score, utility=edge, reasons=reasons, risks=risks + ['FUSION_RISK_VETO'])
             if signal_validity != 'VALID':
                 return TradeProposal(Action.WATCH if decision_score >= self.cfg.min_genesis_to_watch else Action.PASS, mint, confidence=decision_score, utility=edge, reasons=reasons, risks=risks)
-            if self.cfg.require_trained_for_entry and not calibrated:
+            if self.cfg.require_trained_for_entry and not calibrated and not self._untrained_entry_allowed():
                 return TradeProposal(Action.WATCH, mint, confidence=decision_score, utility=edge, reasons=reasons + ['ENTRY_DISABLED_UNTIL_MODEL_TRAINED'], risks=risks)
             if edge >= self.cfg.min_entry_edge and decision_score >= self.cfg.min_genesis_to_watch and sellability >= 0.25:
                 size = self.cfg.default_position_eur * max(0.5, min(2.0, 0.7 + decision_score + max(edge, 0)))
@@ -97,8 +101,11 @@ class AIPaperTrader:
         if hold <= self.cfg.reduce_below_hold_score or distribution > 0.55:
             return TradeProposal(Action.PROTECT, mint, reduce_fraction=0.35, confidence=max(1 - hold, distribution), utility=edge, reasons=reasons, risks=risks)
         if hold >= 0.78 and edge >= self.cfg.min_entry_edge * 0.8 and adds < self.cfg.max_adds_per_position and entry_validity == 'VALID':
-            if not self.cfg.require_trained_for_entry or calibrated:
-                return TradeProposal(Action.ADD, mint, self.cfg.default_position_eur * 0.5, confidence=hold, utility=edge, reasons=reasons, risks=risks)
+            if not self.cfg.require_trained_for_entry or calibrated or self._untrained_entry_allowed():
+                add_reasons = list(reasons)
+                if not calibrated:
+                    add_reasons.append('UNTRAINED_RESEARCH_PAPER_ADD')
+                return TradeProposal(Action.ADD, mint, self.cfg.default_position_eur * 0.5, confidence=hold, utility=edge, reasons=add_reasons, risks=risks)
         if hold >= self.cfg.min_hold_score:
             return TradeProposal(Action.HOLD, mint, confidence=hold, utility=edge, reasons=reasons, risks=risks)
         return TradeProposal(Action.KEEP_RUNNER_BAG, mint, reduce_fraction=max(0.0, 1 - self.cfg.moonbag_fraction), confidence=hold, utility=edge, reasons=reasons, risks=risks)
