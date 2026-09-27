@@ -33,6 +33,7 @@ from .engines.fomo import FomoEngine
 from .engines.mirofish import MiroFishRolloutEngine
 from .engines.cohorts import CohortDiscoveryEngine
 from .engines.fusion import MultiBrainStateFusionEngine
+from .engines.early_formation import EarlySmartCapitalFormationEngine
 from .ai_trader import AIPaperTrader, Action, TradeProposal
 from .risk_governor import RiskGovernor
 from .execution import PaperExecutionEngine, PaperFill
@@ -96,6 +97,7 @@ class RunnerGenesisOmega:
         self.mirofish = MiroFishRolloutEngine(settings.mirofish, deterministic=settings.mode.upper() in {'BACKTEST','REPLAY'})
         self.cohorts = CohortDiscoveryEngine()
         self.fusion = MultiBrainStateFusionEngine()
+        self.early_formation = EarlySmartCapitalFormationEngine(settings.early_formation)
         self.exec_alpha = ExecutableAlphaModel()
         self.trader = AIPaperTrader(settings.trader, paper_only=settings.paper_only)
         self.risk = RiskGovernor(settings.risk)
@@ -437,6 +439,13 @@ class RunnerGenesisOmega:
         f.update(launch)
         fomo = self.fomo.features(e.token_mint, e.timestamp)
         f.update(fomo)
+        formation = self.early_formation.observe_and_features(
+            e.token_mint,
+            e.timestamp,
+            f,
+            token.price_usd,
+        )
+        f.update(formation)
 
         world = self.world.predict(f)
         f.update(world)
