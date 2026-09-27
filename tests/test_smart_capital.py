@@ -292,3 +292,20 @@ def test_smart_30d_score_is_not_boosted_by_old_resolved_wins():
     assert with_old['sample_size'] == recent_only['sample_size'] == 8
     assert abs(with_old['smart_capital_30d_score'] - recent_only['smart_capital_30d_score']) < 1e-12
     assert abs(with_old['window_wallet_quality_score'] - recent_only['window_wallet_quality_score']) < 1e-12
+
+
+
+def test_dominant_actor_cluster_fingerprint_repeats_across_tokens():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    actor = ActorGraphEngine(coevent_window_seconds=120)
+    for mint in ["TOKEN_A", "TOKEN_B"]:
+        actor.observe(ev(f"{mint}-A", t0, mint=mint, wallet="WALLET_A"))
+        actor.observe(ev(f"{mint}-B", t0+timedelta(seconds=10), mint=mint, wallet="WALLET_B"))
+
+    a = actor.token_cluster_features("TOKEN_A", t0+timedelta(seconds=20))
+    b = actor.token_cluster_features("TOKEN_B", t0+timedelta(seconds=20))
+
+    assert a["dominant_actor_cluster_id"] is not None
+    assert a["dominant_actor_cluster_id"] == b["dominant_actor_cluster_id"]
+    assert a["dominant_actor_cluster_fraction"] == 1.0
+    assert b["dominant_actor_cluster_fraction"] == 1.0
