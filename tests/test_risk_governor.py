@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 from runner_genesis.config import RiskConfig
 from runner_genesis.risk_governor import RiskGovernor
 from runner_genesis.ai_trader import TradeProposal,Action
-from runner_genesis.domain.state import PaperAccount,TokenState
+from runner_genesis.domain.state import PaperAccount,TokenState,PaperPosition
 
 def test_low_liquidity_veto():
     g=RiskGovernor(RiskConfig(min_liquidity_usd=10000))
@@ -96,3 +96,89 @@ def test_drawdown_does_not_block_risk_reduction():
     assert reduction.approved
     assert 'MAX_DAILY_LOSS' not in reduction.reasons
     assert 'MAX_DRAWDOWN' not in reduction.reasons
+
+
+
+def test_cross_position_wallet_cluster_exposure_veto():
+    cfg = RiskConfig(
+        min_liquidity_usd=10000,
+        max_correlated_exposure_pct=0.35,
+        min_cluster_fraction_for_exposure=0.50,
+        max_account_pct_per_trade=1.0,
+        max_position_eur=200.0,
+        max_simultaneous_positions=10,
+    )
+    g = RiskGovernor(cfg)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    a = PaperAccount(300, 300)
+    a.positions["OLD"] = PaperPosition(
+        token_mint="OLD",
+        quantity=80.0,
+        avg_entry_price=1.0,
+        cost_basis_eur=80.0,
+        opened_at=now,
+        last_updated_at=now,
+        risk_cluster_id="actor-cluster:abc",
+        risk_cluster_fraction=0.8,
+    )
+    token = TokenState("NEW", liquidity_usd=100000)
+    proposal = TradeProposal(Action.ENTER, "NEW", amount_eur=30.0)
+    blocked = g.evaluate(
+        proposal, a, token,
+        features={
+            "sellability_score": 1.0,
+            "manipulation_risk": 0.0,
+            "entry_validity": "VALID",
+            "dominant_actor_cluster_id": "actor-cluster:abc",
+            "dominant_actor_cluster_fraction": 0.8,
+        },
+        now=now,
+    )
+    assert not blocked.approved
+    assert "MAX_WALLET_CLUSTER_EXPOSURE" in blocked.reasons
+
+    other = g.evaluate(
+        proposal, a, token,
+        features={
+            "sellability_score": 1.0,
+            "manipulation_risk": 0.0,
+            "entry_validity": "VALID",
+            "dominant_actor_cluster_id": "actor-cluster:different",
+            "dominant_actor_cluster_fraction": 0.8,
+        },
+        now=now,
+    )
+    assert "MAX_WALLET_CLUSTER_EXPOSURE" not in other.reasons
+
+
+def test_minor_cluster_fraction_does_not_trigger_portfolio_cluster_cap():
+    cfg = RiskConfig(
+        min_liquidity_usd=10000,
+        max_correlated_exposure_pct=0.35,
+        min_cluster_fraction_for_exposure=0.50,
+        max_account_pct_per_trade=1.0,
+        max_position_eur=200.0,
+        max_simultaneous_positions=10,
+    )
+    g = RiskGovernor(cfg)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    a = PaperAccount(300, 300)
+    a.positions["OLD"] = PaperPosition(
+        "OLD", 100.0, 1.0, 100.0, now, now,
+        risk_cluster_id="actor-cluster:abc",
+        risk_cluster_fraction=0.8,
+    )
+    token = TokenState("NEW", liquidity_usd=100000)
+    decision = g.evaluate(
+        TradeProposal(Action.ENTER, "NEW", amount_eur=20.0),
+        a, token,
+        features={
+            "sellability_score": 1.0,
+            "manipulation_risk": 0.0,
+            "entry_validity": "VALID",
+            "dominant_actor_cluster_id": "actor-cluster:abc",
+            "dominant_actor_cluster_fraction": 0.30,
+        },
+        now=now,
+    )
+    assert "MAX_WALLET_CLUSTER_EXPOSURE" not in decision.reasons
