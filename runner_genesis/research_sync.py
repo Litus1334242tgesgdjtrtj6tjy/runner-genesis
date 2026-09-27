@@ -39,6 +39,52 @@ class ResearchSyncCoordinator:
             "last_result": self._last_result,
         }
 
+
+    @staticmethod
+    def _callout_observation(row: dict[str, Any], observed_at: datetime) -> dict[str, Any] | None:
+        def first(*keys):
+            for key in keys:
+                value = row.get(key)
+                if value is not None:
+                    return value
+            return None
+        token = first("token_mint", "tokenMint", "token_address", "tokenAddress", "mint", "contract")
+        nested_token = row.get("token") if isinstance(row.get("token"), dict) else {}
+        if not token:
+            for key in ("mint", "address", "tokenAddress", "token_address"):
+                if nested_token.get(key):
+                    token = nested_token[key]
+                    break
+        if not token:
+            return None
+        actor = first("wallet", "wallet_address", "walletAddress", "author", "handle", "user_id", "userId")
+        nested_user = row.get("user") if isinstance(row.get("user"), dict) else {}
+        if not actor:
+            actor = nested_user.get("wallet") or nested_user.get("handle") or nested_user.get("id")
+        raw_ts = first("timestamp", "created_at", "createdAt", "published_at", "publishedAt")
+        ts = observed_at
+        if isinstance(raw_ts, (int, float)):
+            value = float(raw_ts)
+            if value > 10_000_000_000:
+                value /= 1000.0
+            ts = datetime.fromtimestamp(value, tz=timezone.utc)
+        elif isinstance(raw_ts, str):
+            try:
+                ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except ValueError:
+                ts = observed_at
+        return {
+            "token_mint": str(token),
+            "timestamp": ts,
+            "source": "FOMOSCAN_PUMP_CALLOUT",
+            "kind": "PUMP_CALLOUT",
+            "confidence": 0.75,
+            "actor_key": str(actor) if actor is not None else None,
+            "metadata": {"provider_observed_at": observed_at, "raw_id": first("id", "callout_id", "calloutId")},
+        }
+
     async def sync_once(self, max_wallets: int | None = None) -> dict[str, Any]:
         if not self.enabled:
             result = {
@@ -54,6 +100,29 @@ class ResearchSyncCoordinator:
             base_url=self.settings.fomoscan_base_url,
         )
         rows, observed_at = await provider.pump_leaderboard()
+        callout_count = 0
+        if self.settings.fomo.enabled:
+            try:
+                callouts, callout_observed_at = await provider.pump_callouts(limit=100)
+                for row in callouts:
+                    obs = self._callout_observation(row, callout_observed_at)
+                    if obs is None:
+                        continue
+                    self.engine.fomo.ingest(obs)
+                    callout_count += 1
+                    if self.engine.repository:
+                        self.engine.repository.record_discovery({
+                            "token_mint": obs["token_mint"],
+                            "wallet_address": None,
+                            "observed_at": obs["timestamp"],
+                            "source": obs["source"],
+                            "kind": obs["kind"],
+                            "actor_key": obs["actor_key"],
+                        })
+            except Exception:
+                # Leaderboard sync remains usable even if the optional callout feed changes.
+                callout_count = 0
+
         accepted = self.engine.discovery.ingest_leaderboard(
             rows,
             observed_at=observed_at,
@@ -103,6 +172,7 @@ class ResearchSyncCoordinator:
             "observed_at": observed_at,
             "leaderboard_rows": len(rows),
             "accepted_snapshots": accepted,
+            "fomo_callouts_ingested": callout_count,
             "wallet_backfills": backfills,
         }
         return self._last_result
