@@ -266,7 +266,13 @@ class SmartCapitalEngine:
         if not sample:
             return "UNKNOWN"
         med = median(sample)
-        trade_count = len(self.wallet_trade_times.get(wallet, []))
+        # Derive frequency from persisted position counters so style survives restarts;
+        # wallet_trade_times is only an in-memory convenience cache.
+        trade_count = sum(
+            int(p.buy_count) + int(p.sell_count)
+            for (w, _), p in self.positions.items()
+            if w == wallet
+        )
         if med < 300 and trade_count >= 4:
             return "SCALPER"
         if med >= 6 * 3600:
