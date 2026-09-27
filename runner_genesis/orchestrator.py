@@ -459,6 +459,14 @@ class RunnerGenesisOmega:
         alpha = self.exec_alpha.compute(probs, f, self.settings.trader.default_position_eur, self.settings.execution)
         f.update(alpha)
 
+        # Risk sizing/drawdown must see the newest point-in-time marks, not the previous
+        # event's cached account equity.
+        pre_trade_prices = {
+            m: float(self.store.token(m).price_usd or p.avg_entry_price)
+            for m, p in self.portfolio.account.positions.items()
+        }
+        self.portfolio.mark_to_market(pre_trade_prices)
+
         # A previously confirmed ENTER/ADD is executed at the first verified market event
         # at or after the configured delay, never at the signal-time price.
         due_fill, due_reasons = self._execute_due_pending(
