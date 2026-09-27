@@ -416,6 +416,27 @@ class RuntimeRepository:
             s.add(PaperTradeUpdateRow(token_mint=mint, observed_at=observed_at, update_type=update_type, payload_json=_json(payload)))
             s.commit()
 
+    def load_paper_updates(self, limit: int = 100_000) -> list[dict]:
+        with self.Session() as s:
+            rows = s.execute(
+                select(PaperTradeUpdateRow)
+                .order_by(PaperTradeUpdateRow.observed_at.asc(), PaperTradeUpdateRow.id.asc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            out = []
+            for r in rows:
+                try:
+                    payload = json.loads(r.payload_json) if r.payload_json else {}
+                except Exception:
+                    payload = {}
+                out.append({
+                    'token_mint': r.token_mint,
+                    'observed_at': r.observed_at,
+                    'update_type': r.update_type,
+                    'payload': payload,
+                })
+            return out
+
     def record_backtest_run(self, run_id: str, created_at: datetime, variant: str, payload: dict, dataset_id: str | None = None) -> None:
         with self.Session() as s:
             s.add(BacktestRunRow(run_id=run_id, created_at=created_at, variant=variant, dataset_id=dataset_id, payload_json=_json(payload)))
