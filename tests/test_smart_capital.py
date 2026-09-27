@@ -205,3 +205,14 @@ def test_actor_graph_dedupes_replayed_event_ids():
     after = actor.link_confidence('A', 'B')
     assert before > 0
     assert after == before
+
+
+
+def test_out_of_order_history_never_links_to_future_buffered_buy():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    actor = ActorGraphEngine(coevent_window_seconds=120)
+    future = ev('future-a', t0+timedelta(minutes=5), wallet='A')
+    past = ev('past-b', t0, wallet='B')
+    actor.observe(future)
+    actor.observe(past)
+    assert actor.link_confidence('A', 'B') == 0.0
