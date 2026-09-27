@@ -216,3 +216,35 @@ def test_out_of_order_history_never_links_to_future_buffered_buy():
     actor.observe(future)
     actor.observe(past)
     assert actor.link_confidence('A', 'B') == 0.0
+
+
+
+def test_historical_smart_capital_ignores_orphan_sell_and_dedupes_events():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store = MarketStateStore()
+    smart = SmartCapitalEngine(
+        SmartCapitalConfig(),
+        WalletQualityEngine(),
+        PumpDiscoveryEngine(PumpDiscoveryConfig()),
+    )
+    orphan_sell = MarketEvent(
+        event_id='orphan-sell', timestamp=t0, token_mint='HIST', wallet='W',
+        event_type=EventType.SELL, amount_token=50.0, usd_value=50.0,
+    )
+    buy = MarketEvent(
+        event_id='hist-buy', timestamp=t0+timedelta(minutes=1), token_mint='HIST', wallet='W',
+        event_type=EventType.BUY, amount_token=100.0, usd_value=100.0, price_usd=1.0,
+    )
+    sell = MarketEvent(
+        event_id='hist-sell', timestamp=t0+timedelta(minutes=2), token_mint='HIST', wallet='W',
+        event_type=EventType.SELL, amount_token=40.0, usd_value=48.0, price_usd=1.2,
+    )
+
+    smart.observe_historical_batch([orphan_sell, buy, sell, buy])
+    p = smart.positions[('W', 'HIST')]
+    assert p.buy_count == 1
+    assert p.sell_count == 1
+    assert p.bought_token == 100.0
+    assert p.sold_token == 40.0
+    assert abs(p.retained_fraction - 0.60) < 1e-12
+    assert p.event_ids == ['hist-buy', 'hist-sell']
