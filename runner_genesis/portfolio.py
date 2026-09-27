@@ -8,11 +8,11 @@ class PortfolioLedger:
         self.account = PaperAccount(starting_cash_eur, starting_cash_eur)
         self.fills: list[PaperFill] = []
 
-    def apply_fill(self, fill: PaperFill):
-        self.fills.append(fill)
+    def apply_fill(self, fill: PaperFill) -> bool:
         self.account.advance_accounting_day(fill.timestamp)
         a = self.account
         if fill.failed:
+            self.fills.append(fill)
             network_cost = max(0.0, float(fill.fees_eur or 0.0))
             if network_cost > 0:
                 charged = min(network_cost, max(0.0, a.cash_eur))
@@ -20,14 +20,15 @@ class PortfolioLedger:
                 a.realized_pnl_eur -= charged
                 a.daily_realized_pnl_eur -= charged
                 a.daily_spend_eur += charged
-            return
+            return True
         if fill.filled_eur <= 0:
-            return
+            return False
 
         if fill.side == 'BUY':
             total_cost = fill.filled_eur + fill.fees_eur
             if total_cost > a.cash_eur + 1e-9:
-                return
+                return False
+            self.fills.append(fill)
             p = a.positions.get(fill.token_mint)
             if p is None:
                 p = PaperPosition(fill.token_mint, 0, 0, 0, fill.timestamp, fill.timestamp)
@@ -42,13 +43,15 @@ class PortfolioLedger:
                 p.adds += 1
             a.cash_eur -= total_cost
             a.daily_spend_eur += total_cost
+            return True
         else:
             p = a.positions.get(fill.token_mint)
             if not p:
-                return
+                return False
             qty = min(p.quantity, fill.quantity)
             if qty <= 0:
-                return
+                return False
+            self.fills.append(fill)
             fee_fraction = qty / max(fill.quantity, 1e-12)
             proceeds = qty * fill.execution_price - fill.fees_eur * fee_fraction
             avg_cost_per_unit = p.cost_basis_eur / max(p.quantity, 1e-12)
@@ -63,6 +66,7 @@ class PortfolioLedger:
             p.last_updated_at = fill.timestamp
             if p.quantity <= 1e-12:
                 del a.positions[fill.token_mint]
+            return True
 
     def mark_to_market(self, prices: dict[str, float]):
         a = self.account
