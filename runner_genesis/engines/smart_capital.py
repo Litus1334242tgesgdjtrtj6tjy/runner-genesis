@@ -518,6 +518,8 @@ class SmartCapitalEngine:
             "smart_capital_30d_score": m30.get("smart_capital_30d_score"),
             "data_quality_score": m30.get("data_quality_score"),
             "wallet_quality_score": m30.get("wallet_quality_score"),
+            "swing_score_30d": m30.get("swing_score"),
+            "hold_score_30d": m30.get("hold_score"),
             "sample_size_30d": m30.get("sample_size"),
         }
 
