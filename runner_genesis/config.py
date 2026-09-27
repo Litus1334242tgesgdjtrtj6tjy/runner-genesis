@@ -99,6 +99,18 @@ class PersistenceConfig(BaseModel):
     enabled: bool = True
 
 
+class HeliusHistoryConfig(BaseModel):
+    enabled: bool = True
+    page_limit: int = 100
+    max_pages: int = 5
+    min_funding_sol: float = 0.01
+
+
+class ExternalDiscoveryConfig(BaseModel):
+    fomoscan_enabled: bool = False
+    refresh_seconds: float = 300.0
+
+
 class Settings(BaseModel):
     mode: str = "PAPER"
     live_trading: bool = False
@@ -113,11 +125,15 @@ class Settings(BaseModel):
     mirofish: MiroFishConfig = Field(default_factory=MiroFishConfig)
     pump_discovery: PumpDiscoveryConfig = Field(default_factory=PumpDiscoveryConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
+    helius_history: HeliusHistoryConfig = Field(default_factory=HeliusHistoryConfig)
+    external_discovery: ExternalDiscoveryConfig = Field(default_factory=ExternalDiscoveryConfig)
     point_in_time: dict[str, Any] = Field(default_factory=lambda: {"strict": True})
     database_url: str = "sqlite:///./runner_genesis.db"
     solana_rpc_http: str = "https://api.mainnet-beta.solana.com"
     solana_rpc_ws: str = "wss://api.mainnet-beta.solana.com"
     helius_api_key: str | None = None
+    fomoscan_api_key: str | None = None
+    fomoscan_base_url: str = "https://api.fomoscan.sh"
 
     @property
     def paper_only(self) -> bool:
@@ -150,6 +166,10 @@ def load_settings(path: str | Path | None = None) -> Settings:
         env_overlay["solana_rpc_ws"] = os.environ["SOLANA_RPC_WS"]
     if os.getenv("HELIUS_API_KEY"):
         env_overlay["helius_api_key"] = os.environ["HELIUS_API_KEY"]
+    if os.getenv("FOMOSCAN_API_KEY"):
+        env_overlay["fomoscan_api_key"] = os.environ["FOMOSCAN_API_KEY"]
+    if os.getenv("FOMOSCAN_BASE_URL"):
+        env_overlay["fomoscan_base_url"] = os.environ["FOMOSCAN_BASE_URL"]
     if os.getenv("LIVE_TRADING") is not None:
         env_overlay["live_trading"] = os.getenv("LIVE_TRADING", "false").lower() == "true"
     if os.getenv("PAPER_STARTING_CAPITAL_EUR"):
