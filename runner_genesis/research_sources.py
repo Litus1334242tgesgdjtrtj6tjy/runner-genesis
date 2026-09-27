@@ -98,6 +98,7 @@ class WalletResearchBackfillService:
         store,
         actor,
         *,
+        smart=None,
         apply_actor_events: bool = True,
         apply_funding: bool = True,
     ) -> BackfillResult:
@@ -111,12 +112,25 @@ class WalletResearchBackfillService:
             for link in bundle.funding_links:
                 actor.observe_funding_link(link.wallet, link.funder, link.timestamp, link.confidence)
 
+        if smart is not None and hasattr(smart, "observe_historical_batch"):
+            smart.observe_historical_batch(bundle.events)
+
         added = store.backfill_wallet_observations(bundle.wallet, bundle.outcomes) if bundle.outcomes else 0
         if self.repository:
             for link in bundle.funding_links:
                 self.repository.record_funding_relationship(link)
             for obs in bundle.outcomes:
                 self.repository.record_wallet_outcome(bundle.wallet, obs)
+            if smart is not None and bundle.events:
+                latest_by_mint: dict[str, datetime] = {}
+                for event in bundle.events:
+                    current = latest_by_mint.get(event.token_mint)
+                    if current is None or event.timestamp > current:
+                        latest_by_mint[event.token_mint] = event.timestamp
+                for mint, observed_at in latest_by_mint.items():
+                    snapshot = smart.position_snapshot(bundle.wallet, mint, observed_at)
+                    if snapshot:
+                        self.repository.record_wallet_position(bundle.wallet, mint, observed_at, snapshot)
 
         return BackfillResult(
             wallet=bundle.wallet,
@@ -127,9 +141,9 @@ class WalletResearchBackfillService:
             added_outcomes=added,
         )
 
-    async def backfill_wallet(self, wallet: str, store, actor, *, limit: int = 100, max_pages: int = 5) -> BackfillResult:
+    async def backfill_wallet(self, wallet: str, store, actor, *, smart=None, limit: int = 100, max_pages: int = 5) -> BackfillResult:
         bundle = await self.fetch_wallet_bundle(wallet, limit=limit, max_pages=max_pages)
-        return self.apply_bundle(bundle, store, actor)
+        return self.apply_bundle(bundle, store, actor, smart=smart)
 
 
 class FomoScanPumpProvider:
