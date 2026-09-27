@@ -5,6 +5,7 @@ import hashlib, math
 import numpy as np
 from .ai_trader import TradeProposal, Action
 from .domain.state import TokenState
+from .fees import PumpFeeSchedule
 
 @dataclass
 class PaperFill:
@@ -22,9 +23,16 @@ class PaperFill:
     partial: bool
     timestamp: datetime
     reason: str=''
+    protocol_fee_bps: float | None = None
+    fee_source: str = 'CONFIG_FALLBACK'
+    fee_schedule_version: str | None = None
+    fee_confidence: float = 0.0
 
 class PaperExecutionEngine:
-    def __init__(self,cfg,seed:int=20260924): self.cfg=cfg; self.seed=seed
+    def __init__(self,cfg,seed:int=20260924):
+        self.cfg=cfg
+        self.seed=seed
+        self.pump_fees=PumpFeeSchedule()
 
     def _rng(self,key:str):
         h=hashlib.sha256((str(self.seed)+key).encode()).digest()
@@ -53,7 +61,13 @@ class PaperExecutionEngine:
         slip=self.estimate_slippage(filled,liq)
         direction=1 if side=='BUY' else -1
         exec_price=price*(1+direction*slip)
-        fee_rate=(self.cfg.base_fee_bps+self.cfg.priority_fee_bps)/10000.0
+        fee_quote=self.pump_fees.quote(token)
+        protocol_fee_bps=float(fee_quote.protocol_fee_bps) if fee_quote.protocol_fee_bps is not None else float(self.cfg.base_fee_bps)
+        fee_rate=(protocol_fee_bps+float(self.cfg.priority_fee_bps))/10000.0
         fees=filled*fee_rate
         qty=filled/max(exec_price,1e-12)
-        return PaperFill(p.token_mint,side,requested,filled,qty,price,exec_price,slip,fees,latency,False,partial,now+timedelta(milliseconds=latency))
+        return PaperFill(
+            p.token_mint,side,requested,filled,qty,price,exec_price,slip,fees,latency,
+            False,partial,now+timedelta(milliseconds=latency),'',
+            protocol_fee_bps,fee_quote.source,fee_quote.schedule_version,fee_quote.confidence,
+        )
