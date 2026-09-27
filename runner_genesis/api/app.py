@@ -177,11 +177,15 @@ def account():
 
 @app.get('/api/smart-capital/wallets')
 def smart_wallets(limit: int = 100):
+    """TRUE_SMART_CAPITAL_30D: on-chain-qualified ranking, not a Pump PnL list."""
     now = max((t.last_event_at for t in engine.store.tokens.values() if t.last_event_at), default=datetime.now(timezone.utc))
-    wallets = sorted(engine.store.wallets)
-    rows = [engine.smart.wallet_metrics(w, now, engine.store) for w in wallets]
-    rows.sort(key=lambda x: float(x.get('wallet_quality_score') or 0.0), reverse=True)
-    return rows[: max(1, min(limit, 1000))]
+    wallets = sorted(set(engine.store.wallets) | set(engine.discovery.wallet_sources))
+    return engine.smart.true_smart_capital_30d(
+        wallets,
+        now,
+        engine.store,
+        limit=max(1, min(limit, 1000)),
+    )
 
 
 @app.get('/api/smart-capital/tokens')
