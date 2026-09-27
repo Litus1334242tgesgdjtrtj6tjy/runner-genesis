@@ -29,6 +29,7 @@ from .engines.smart_capital import SmartCapitalEngine
 from .engines.launch_integrity import LaunchIntegrityEngine
 from .engines.fomo import FomoEngine
 from .engines.mirofish import MiroFishRolloutEngine
+from .engines.cohorts import CohortDiscoveryEngine
 from .ai_trader import AIPaperTrader, Action, TradeProposal
 from .risk_governor import RiskGovernor
 from .execution import PaperExecutionEngine, PaperFill
@@ -89,6 +90,7 @@ class RunnerGenesisOmega:
         self.launch_integrity = LaunchIntegrityEngine()
         self.fomo = FomoEngine(settings.fomo)
         self.mirofish = MiroFishRolloutEngine(settings.mirofish)
+        self.cohorts = CohortDiscoveryEngine()
         self.exec_alpha = ExecutableAlphaModel()
         self.trader = AIPaperTrader(settings.trader)
         self.risk = RiskGovernor(settings.risk)
