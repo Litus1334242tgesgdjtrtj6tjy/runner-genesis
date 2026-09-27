@@ -38,6 +38,9 @@ class ExecutionConfig(BaseModel):
     max_liquidity_fraction: float = 0.02
     failed_tx_base_probability: float = 0.015
     partial_fill_enabled: bool = True
+    network_base_fee_lamports: int = 5000
+    network_priority_fee_lamports: int = 0
+    network_signature_count: int = 1
 
 
 class TraderConfig(BaseModel):
