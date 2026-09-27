@@ -172,10 +172,12 @@ class ActorGraphEngine:
         if e.event_type in BUY_EVENTS and e.wallet:
             arr = self.recent_by_token[e.token_mint]
             cutoff = e.timestamp - self.coevent_window
-            arr[:] = [x for x in arr if x.timestamp >= cutoff]
+            arr[:] = [x for x in arr if cutoff <= x.timestamp <= e.timestamp]
             for prev in arr:
                 if prev.wallet and prev.wallet != e.wallet:
-                    dt = abs((e.timestamp - prev.timestamp).total_seconds())
+                    dt = (e.timestamp - prev.timestamp).total_seconds()
+                    if dt < 0 or dt > self.coevent_window.total_seconds():
+                        continue
                     conf = max(0.10, 0.60 * (1.0 - dt / max(self.coevent_window.total_seconds(), 1)))
                     self._link(prev.wallet, e.wallet, "CO_BUYS", conf, e.timestamp)
             arr.append(e)
