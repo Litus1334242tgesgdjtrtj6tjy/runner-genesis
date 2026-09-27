@@ -119,6 +119,7 @@ class ExternalDiscoveryConfig(BaseModel):
     auto_refresh: bool = False
     refresh_seconds: float = 300.0
     max_wallets_per_refresh: int = 25
+    top_wallet_backfill_fraction: float = 0.60
 
 
 class Settings(BaseModel):
