@@ -21,6 +21,7 @@ class RiskConfig(BaseModel):
     max_bundle_pct: float = 0.30
     max_suspected_related_concentration_pct: float = 0.35
     max_correlated_exposure_pct: float = 0.35
+    min_cluster_fraction_for_exposure: float = 0.50
     min_sellability_score: float = 0.25
     max_manipulation_risk: float = 0.78
     kill_switch: bool = False
