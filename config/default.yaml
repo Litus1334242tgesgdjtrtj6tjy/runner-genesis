@@ -128,6 +128,7 @@ helius_history:
   page_limit: 100
   max_pages: 5
   min_funding_sol: 0.01
+  refresh_seconds: 21600
 
 external_discovery:
   fomoscan_enabled: true
