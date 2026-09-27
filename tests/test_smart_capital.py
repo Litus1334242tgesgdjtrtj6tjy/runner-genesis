@@ -171,3 +171,22 @@ def test_token_cluster_features_expire_old_cobuy_window():
     assert fresh['raw_wallet_count'] == 3
     assert stale['raw_wallet_count'] == 0
     assert stale['cluster_size'] == 0
+
+
+
+def test_thousand_wallet_service_funder_stays_sparse():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    actor = ActorGraphEngine(max_funder_pair_expansion=32)
+    wallets = [f'SCALE{i}' for i in range(1000)]
+    for i, w in enumerate(wallets):
+        actor.observe_funding_link(w, 'MEGA_SERVICE', t0+timedelta(seconds=i), 0.95)
+
+    assert 'MEGA_SERVICE' in actor.hub_funders
+    assert len(actor.funder_to_wallets['MEGA_SERVICE']) == 1000
+    wallet_edges = [
+        (a, b) for a, b in actor.graph.edges()
+        if not str(a).startswith('funder:') and not str(b).startswith('funder:')
+    ]
+    assert len(wallet_edges) < 2000
+    features = actor.cohort_features(wallets)
+    assert features['effective_wallet_count'] > 700
