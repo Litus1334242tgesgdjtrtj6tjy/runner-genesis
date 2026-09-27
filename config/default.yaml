@@ -54,6 +54,7 @@ pump_discovery:
   kol_enabled: true
   cohort_enabled: true
   max_snapshot_age_seconds: 3600
+  participant_window_seconds: 300
 
 fomo:
   enabled: true
