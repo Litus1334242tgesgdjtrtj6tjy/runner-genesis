@@ -73,6 +73,7 @@ class ExecutableLabelConfig:
     default_position_eur: float = 10.0
     minimum_executable_eur: float = 2.0
     horizons_seconds: tuple[int, ...] = (900, 1800, 3600)
+    fixed_exit_tolerance_seconds: float = 120.0
 
 
 class PlattCalibratedBinaryModel:
@@ -267,6 +268,7 @@ def _future_labels(
     }
     horizon_returns: dict[int, list[float]] = {}
     horizon_exec_sizes: dict[int, list[float]] = {}
+    fixed_horizon_returns: dict[int, float | None] = {}
     for horizon in label_cfg.horizons_seconds:
         end = decision_time + timedelta(seconds=int(horizon))
         rows = [x for x in observations if entry["timestamp"] <= x["timestamp"] <= end]
@@ -284,6 +286,30 @@ def _future_labels(
         horizon_returns[int(horizon)] = returns
         horizon_exec_sizes[int(horizon)] = sizes
 
+        tolerance = max(0.0, float(label_cfg.fixed_exit_tolerance_seconds))
+        fixed_candidates: list[tuple[datetime, float]] = []
+        for row in rows:
+            age_to_horizon = (end - row["timestamp"]).total_seconds()
+            if age_to_horizon < 0 or age_to_horizon > tolerance:
+                continue
+            rr = _roundtrip_return(
+                entry,
+                row,
+                label_cfg.default_position_eur,
+                execution_cfg,
+                max_slippage_pct=max_slippage_pct,
+            )
+            if rr is None:
+                continue
+            ret, executable = rr
+            if executable < label_cfg.minimum_executable_eur:
+                continue
+            fixed_candidates.append((row["timestamp"], float(ret)))
+        fixed_horizon_returns[int(horizon)] = (
+            max(fixed_candidates, key=lambda x: x[0])[1]
+            if fixed_candidates else None
+        )
+
     def max_ret(h: int) -> float | None:
         xs = horizon_returns.get(h, [])
         return max(xs) if xs else None
@@ -296,6 +322,9 @@ def _future_labels(
         "mfe_net_return_15m": r15,
         "mfe_net_return_30m": r30,
         "mfe_net_return_60m": r60,
+        "fixed_exit_net_return_15m": fixed_horizon_returns.get(900),
+        "fixed_exit_net_return_30m": fixed_horizon_returns.get(1800),
+        "fixed_exit_net_return_60m": fixed_horizon_returns.get(3600),
         "min_executable_eur_60m": min(horizon_exec_sizes.get(3600, []) or [0.0]),
         "sellable_observations_60m": len(horizon_returns.get(3600, [])),
         "y_executable_runner": int(r60 >= 1.0),
