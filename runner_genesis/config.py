@@ -85,6 +85,10 @@ class MiroFishConfig(BaseModel):
     rollout_timeout_ms: int = 250
     use_world_model_prior: bool = True
     require_min_data_quality: float = 0.45
+    trigger_min_consensus: float = 0.25
+    trigger_min_accumulation: float = 0.20
+    trigger_min_top_trader_wave: float = 0.20
+    trigger_min_fomo: float = 0.30
 
 
 class PumpDiscoveryConfig(BaseModel):
