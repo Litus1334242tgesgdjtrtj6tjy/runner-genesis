@@ -43,8 +43,22 @@ class BackfillResult:
     added_outcomes: int
 
 
+@dataclass
+class WalletResearchBundle:
+    wallet: str
+    transactions: list[dict[str, Any]]
+    events: list[Any]
+    funding_links: list[Any]
+    outcomes: list[Any]
+
+
 class WalletResearchBackfillService:
-    """Read-only historical wallet qualification service."""
+    """Read-only historical wallet qualification service.
+
+    Fetch/normalize is separated from mutation so the coordinator can merge several wallet
+    histories chronologically before feeding the Actor Graph. This prevents concurrency or
+    wallet-fetch order from manufacturing/coarsening co-buy relationships.
+    """
 
     def __init__(self, client: HeliusWalletHistoryClient, repository=None) -> None:
         self.client = client
@@ -52,32 +66,59 @@ class WalletResearchBackfillService:
         self.normalizer = EnhancedWalletHistoryNormalizer()
         self.outcomes = WalletOutcomeBuilder()
 
-    async def backfill_wallet(self, wallet: str, store, actor, *, limit: int = 100, max_pages: int = 5) -> BackfillResult:
+    async def fetch_wallet_bundle(self, wallet: str, *, limit: int = 100, max_pages: int = 5) -> WalletResearchBundle:
         txs = await self.client.fetch_transactions(wallet, limit=limit, max_pages=max_pages)
         events = []
         funding = []
         for tx in txs:
             events.extend(self.normalizer.normalize_swap(wallet, tx))
             funding.extend(self.normalizer.funding_links(wallet, tx))
-        for event in sorted(events, key=lambda x: x.timestamp):
-            actor.observe(event)
-        for link in sorted(funding, key=lambda x: x.timestamp):
-            actor.observe_funding_link(link.wallet, link.funder, link.timestamp, link.confidence)
-            if self.repository:
-                self.repository.record_funding_relationship(link)
+        events.sort(key=lambda x: x.timestamp)
+        funding.sort(key=lambda x: x.timestamp)
         resolved = self.outcomes.build(events)
-        added = store.backfill_wallet_observations(wallet, resolved) if resolved else 0
-        if self.repository:
-            for obs in resolved:
-                self.repository.record_wallet_outcome(wallet, obs)
-        return BackfillResult(
+        return WalletResearchBundle(
             wallet=wallet,
-            transactions=len(txs),
-            swap_events=len(events),
-            funding_links=len(funding),
-            resolved_outcomes=len(resolved),
+            transactions=txs,
+            events=events,
+            funding_links=funding,
+            outcomes=resolved,
+        )
+
+    def apply_bundle(
+        self,
+        bundle: WalletResearchBundle,
+        store,
+        actor,
+        *,
+        apply_actor_events: bool = True,
+        apply_funding: bool = True,
+    ) -> BackfillResult:
+        if apply_actor_events:
+            for event in bundle.events:
+                actor.observe(event)
+        if apply_funding:
+            for link in bundle.funding_links:
+                actor.observe_funding_link(link.wallet, link.funder, link.timestamp, link.confidence)
+
+        added = store.backfill_wallet_observations(bundle.wallet, bundle.outcomes) if bundle.outcomes else 0
+        if self.repository:
+            for link in bundle.funding_links:
+                self.repository.record_funding_relationship(link)
+            for obs in bundle.outcomes:
+                self.repository.record_wallet_outcome(bundle.wallet, obs)
+
+        return BackfillResult(
+            wallet=bundle.wallet,
+            transactions=len(bundle.transactions),
+            swap_events=len(bundle.events),
+            funding_links=len(bundle.funding_links),
+            resolved_outcomes=len(bundle.outcomes),
             added_outcomes=added,
         )
+
+    async def backfill_wallet(self, wallet: str, store, actor, *, limit: int = 100, max_pages: int = 5) -> BackfillResult:
+        bundle = await self.fetch_wallet_bundle(wallet, limit=limit, max_pages=max_pages)
+        return self.apply_bundle(bundle, store, actor)
 
 
 class FomoScanPumpProvider:
