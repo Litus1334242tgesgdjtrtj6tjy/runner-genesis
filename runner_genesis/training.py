@@ -273,6 +273,7 @@ def build_executable_dataset(
             decision_time,
             settings.execution,
             label_cfg,
+            max_slippage_pct=float(settings.risk.max_slippage_pct),
         )
         if labels is None:
             continue
