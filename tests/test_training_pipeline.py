@@ -15,6 +15,7 @@ from runner_genesis.training import (
     _with_label_availability,
     _purge_before_boundary,
     _safe_metric,
+    _label_horizon_fully_observed,
 )
 
 
@@ -123,3 +124,19 @@ def test_classification_metrics_include_calibration_and_top_n():
     assert 0.0 <= metrics["precision_at_10pct"] <= 1.0
     assert 0.0 <= metrics["ece_10bin"] <= 1.0
     assert metrics["false_positive"] == 1.0
+
+
+
+def test_right_censored_decision_is_not_labelable():
+    cfg = ExecutableLabelConfig(horizons_seconds=(900, 1800, 3600))
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert not _label_horizon_fully_observed(
+        t0,
+        t0 + timedelta(minutes=59),
+        cfg,
+    )
+    assert _label_horizon_fully_observed(
+        t0,
+        t0 + timedelta(hours=1),
+        cfg,
+    )
