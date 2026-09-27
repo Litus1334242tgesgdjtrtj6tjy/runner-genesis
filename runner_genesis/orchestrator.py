@@ -298,7 +298,9 @@ class RunnerGenesisOmega:
         if rd.approved:
             fill = self.execution.execute(proposal, token, now, position_qty)
             if fill is not None:
-                self.portfolio.apply_fill(fill)
+                applied = self.portfolio.apply_fill(fill)
+                if not applied:
+                    return None, False, rd.reasons + ['PORTFOLIO_REJECTED_FILL']
                 if self.repository:
                     self.repository.record_fill(fill)
                     self.repository.record_paper_update(
