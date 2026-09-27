@@ -185,6 +185,20 @@ def _roundtrip_return(entry: dict[str, Any], exit_obs: dict[str, Any], requested
     return ret, filled * executable_fraction
 
 
+def _label_horizon_fully_observed(
+    decision_time: datetime,
+    dataset_observed_until: datetime | None,
+    label_cfg: ExecutableLabelConfig,
+) -> bool:
+    """Reject right-censored labels whose full future horizon was never captured."""
+    if dataset_observed_until is None:
+        return False
+    decision_time = _aware(decision_time)
+    dataset_observed_until = _aware(dataset_observed_until)
+    required_until = decision_time + timedelta(seconds=max(label_cfg.horizons_seconds))
+    return dataset_observed_until >= required_until
+
+
 def _future_labels(
     observations: list[dict[str, Any]],
     decision_time: datetime,
@@ -284,6 +298,8 @@ def build_executable_dataset(
             select(DecisionRow).order_by(DecisionRow.timestamp.asc(), DecisionRow.id.asc())
         ).scalars().all()
 
+    observed_event_times = [_aware(row.timestamp) for row in events]
+    dataset_observed_until = max(observed_event_times, default=None)
     for row in events:
         obs = _event_observation(row, settings.execution)
         if obs is not None:
@@ -306,6 +322,13 @@ def build_executable_dataset(
                     continue
             except ValueError:
                 continue
+        if not _label_horizon_fully_observed(
+            decision_time,
+            dataset_observed_until,
+            label_cfg,
+        ):
+            # Decisions near the end of a capture are unknown, not negative.
+            continue
         labels = _future_labels(
             by_token.get(row.token_mint, []),
             decision_time,
