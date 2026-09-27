@@ -1,6 +1,6 @@
 from __future__ import annotations
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from .domain.events import MarketEvent, EventType
 from .domain.state import TokenState, WalletState, WalletBuyObservation
 from .point_in_time import PointInTimeSeries
@@ -107,7 +107,8 @@ class MarketStateStore:
         memory. Rebuilding the small per-wallet series avoids weakening PointInTimeSeries'
         chronological append invariant for normal live ingestion.
         """
-        existing = self.wallet_resolved_history[wallet].values_as_of(datetime.max.replace(tzinfo=observations[0].resolved_at.tzinfo) if observations else datetime.max)
+        max_time = datetime.max.replace(tzinfo=(observations[0].resolved_at.tzinfo if observations else timezone.utc))
+        existing = self.wallet_resolved_history[wallet].values_as_of(max_time)
         merged: dict[tuple, WalletBuyObservation] = {}
         for obs in [*existing, *observations]:
             key = (obs.token_mint, obs.event_time, obs.resolved_at)
