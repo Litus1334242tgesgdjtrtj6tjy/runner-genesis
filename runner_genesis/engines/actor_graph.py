@@ -1,6 +1,8 @@
 from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta
+from itertools import combinations
+import math
 import networkx as nx
 from ..domain.events import MarketEvent, EventType
 
@@ -15,7 +17,13 @@ BUY_EVENTS = {
 
 
 class ActorGraphEngine:
-    """Probabilistic relationship graph; it never asserts real-world identity."""
+    """Probabilistic relationship graph; it never asserts real-world identity.
+
+    Relation evidence is kept separately. Shared-funder evidence is automatically
+    downweighted when the funder behaves like a high-degree hub (for example an exchange
+    or distribution service), preventing one common service wallet from manufacturing a
+    fake "clan".
+    """
 
     def __init__(self, coevent_window_seconds: int = 120) -> None:
         self.graph = nx.Graph()
@@ -24,19 +32,77 @@ class ActorGraphEngine:
         self.wallet_to_funders: dict[str, set[str]] = defaultdict(set)
         self.coevent_window = timedelta(seconds=coevent_window_seconds)
 
+    @staticmethod
+    def _combine(confs) -> float:
+        miss = 1.0
+        for c in confs:
+            miss *= 1.0 - max(0.0, min(0.99, float(c)))
+        return min(0.99, 1.0 - miss)
+
+    def _ensure_evidence(self, a: str, b: str) -> dict[str, float]:
+        if not self.graph.has_edge(a, b):
+            self.graph.add_edge(a, b, confidence=0.0, relation="UNKNOWN", evidence={})
+        d = self.graph[a][b]
+        evidence = d.get("evidence")
+        if not isinstance(evidence, dict):
+            old_relation = str(d.get("relation") or "UNKNOWN")
+            old_conf = float(d.get("confidence", 0.0) or 0.0)
+            evidence = {} if old_relation == "UNKNOWN" else {old_relation: old_conf}
+            d["evidence"] = evidence
+        return evidence
+
+    def _recompute_edge(self, a: str, b: str, ts: datetime) -> None:
+        if not self.graph.has_edge(a, b):
+            return
+        d = self.graph[a][b]
+        evidence = self._ensure_evidence(a, b)
+        positive = {k: float(v) for k, v in evidence.items() if float(v) > 0.0}
+        d["confidence"] = self._combine(positive.values()) if positive else 0.0
+        d["relation"] = next(iter(positive)) if len(positive) == 1 else ("MULTI" if positive else "UNKNOWN")
+        d["last_seen"] = ts
+
+    def _set_relation_confidence(self, a: str, b: str, relation: str, confidence: float, ts: datetime) -> None:
+        if not a or not b or a == b:
+            return
+        self.graph.add_node(a, kind=self.graph.nodes.get(a, {}).get("kind", "wallet"))
+        self.graph.add_node(b, kind=self.graph.nodes.get(b, {}).get("kind", "wallet"))
+        evidence = self._ensure_evidence(a, b)
+        evidence[relation] = max(0.0, min(0.99, float(confidence)))
+        self._recompute_edge(a, b, ts)
+
+    def _shared_funder_confidence(self, funder: str) -> float:
+        degree = max(2, len(self.funder_to_wallets.get(funder, ())))
+        # Two-wallet shared funding is strong evidence. As a funder touches many wallets,
+        # the evidence decays toward service/hub behavior instead of growing stronger.
+        hub_factor = math.sqrt(2.0 / degree)
+        return max(0.08, min(0.92, 0.92 * hub_factor))
+
+    def _refresh_funder_sibling_edges(self, funder: str, ts: datetime) -> None:
+        siblings = sorted(self.funder_to_wallets.get(funder, ()))
+        confidence = self._shared_funder_confidence(funder)
+        for a, b in combinations(siblings, 2):
+            # If two wallets share several funders, each relationship is still represented
+            # as one SHARES_FUNDER channel; the strongest non-hub evidence dominates.
+            common = self.wallet_to_funders.get(a, set()).intersection(self.wallet_to_funders.get(b, set()))
+            best = max((self._shared_funder_confidence(x) for x in common), default=0.0)
+            self._set_relation_confidence(a, b, "SHARES_FUNDER", best or confidence, ts)
+
     def observe(self, e: MarketEvent) -> None:
         if e.wallet:
             self.graph.add_node(e.wallet, kind="wallet")
         if e.event_type == EventType.WALLET_FUNDED and e.wallet and e.counterparty:
             f = f"funder:{e.counterparty}"
             self.graph.add_node(f, kind="funder")
-            self.graph.add_edge(f, e.wallet, relation="FUNDS", confidence=float(e.confidence), last_seen=e.timestamp)
+            self.graph.add_edge(
+                f, e.wallet,
+                relation="FUNDS",
+                confidence=float(e.confidence),
+                last_seen=e.timestamp,
+                evidence={"FUNDS": float(e.confidence)},
+            )
             self.funder_to_wallets[e.counterparty].add(e.wallet)
             self.wallet_to_funders[e.wallet].add(e.counterparty)
-            siblings = self.funder_to_wallets[e.counterparty]
-            for other in siblings:
-                if other != e.wallet:
-                    self._link(e.wallet, other, "SHARES_FUNDER", 0.82, e.timestamp)
+            self._refresh_funder_sibling_edges(e.counterparty, e.timestamp)
         if e.event_type == EventType.TRANSFER and e.wallet and e.counterparty:
             self._link(e.wallet, e.counterparty, "DIRECT_TRANSFER", min(0.9, 0.45 + 0.45 * e.confidence), e.timestamp)
         if e.event_type in BUY_EVENTS and e.wallet:
@@ -57,24 +123,29 @@ class ActorGraphEngine:
         self.graph.add_node(wallet, kind="wallet")
         f = f"funder:{funder}"
         self.graph.add_node(f, kind="funder")
-        self.graph.add_edge(f, wallet, relation="FUNDS", confidence=max(0.0, min(1.0, float(confidence))), last_seen=ts)
+        self.graph.add_edge(
+            f, wallet,
+            relation="FUNDS",
+            confidence=max(0.0, min(1.0, float(confidence))),
+            last_seen=ts,
+            evidence={"FUNDS": max(0.0, min(1.0, float(confidence)))},
+        )
         self.funder_to_wallets[funder].add(wallet)
         self.wallet_to_funders[wallet].add(funder)
-        for other in self.funder_to_wallets[funder]:
-            if other != wallet:
-                self._link(wallet, other, "SHARES_FUNDER", min(0.95, 0.75 + 0.20 * float(confidence)), ts)
+        self._refresh_funder_sibling_edges(funder, ts)
 
     def _link(self, a: str, b: str, relation: str, confidence: float, ts: datetime) -> None:
         if not a or not b or a == b:
             return
-        if self.graph.has_edge(a, b):
-            d = self.graph[a][b]
-            old = float(d.get("confidence", 0.0))
-            d["confidence"] = min(0.99, 1 - (1 - old) * (1 - confidence))
-            d["last_seen"] = ts
-            d["relation"] = relation if d.get("relation") == relation else "MULTI"
+        evidence = self._ensure_evidence(a, b)
+        old = float(evidence.get(relation, 0.0) or 0.0)
+        # Repeated independent observations of the same relation accumulate but remain
+        # bounded. Shared-funder uses exact dynamic confidence and is handled separately.
+        if relation == "SHARES_FUNDER":
+            evidence[relation] = max(0.0, min(0.99, float(confidence)))
         else:
-            self.graph.add_edge(a, b, relation=relation, confidence=confidence, last_seen=ts)
+            evidence[relation] = min(0.99, 1.0 - (1.0 - old) * (1.0 - float(confidence)))
+        self._recompute_edge(a, b, ts)
 
     def link_confidence(self, a: str, b: str) -> float:
         if not self.graph.has_edge(a, b):
@@ -93,14 +164,23 @@ class ActorGraphEngine:
         unique = list(dict.fromkeys(w for w in wallets if w))
         return float(sum(self.independence_factor(w, unique) for w in unique))
 
-    def _same_funder_concentration(self, wallets: list[str]) -> float:
+    def _same_funder_concentration_pair(self, wallets: list[str]) -> tuple[float, float]:
         unique = set(wallets)
         if len(unique) < 2:
-            return 0.0
-        max_group = 1
-        for funded in self.funder_to_wallets.values():
-            max_group = max(max_group, len(unique.intersection(funded)))
-        return max_group / len(unique)
+            return 0.0, 0.0
+        raw = 0.0
+        adjusted = 0.0
+        for funder, funded in self.funder_to_wallets.items():
+            matched = len(unique.intersection(funded))
+            if matched < 2:
+                continue
+            share = matched / len(unique)
+            raw = max(raw, share)
+            adjusted = max(adjusted, share * self._shared_funder_confidence(funder) / 0.92)
+        return min(1.0, raw), min(1.0, adjusted)
+
+    def _same_funder_concentration(self, wallets: list[str]) -> float:
+        return self._same_funder_concentration_pair(wallets)[1]
 
     def cohort_features(self, wallets: list[str]) -> dict[str, float]:
         unique = list(dict.fromkeys(w for w in wallets if w))
@@ -112,6 +192,7 @@ class ActorGraphEngine:
                 "independence_ratio": 0.0,
                 "cohort_concentration": 0.0,
                 "same_funder_concentration": 0.0,
+                "same_funder_concentration_raw": 0.0,
             }
         eff = self.effective_wallet_count(unique)
         if n == 1:
@@ -122,12 +203,14 @@ class ActorGraphEngine:
             sub.remove_edges_from(weak)
             components = [len(c) for c in nx.connected_components(sub)] if len(sub) else []
             concentration = max(components, default=1) / n
+        raw_funder, adjusted_funder = self._same_funder_concentration_pair(unique)
         return {
             "raw_wallet_count": float(n),
             "effective_wallet_count": eff,
             "independence_ratio": eff / n,
             "cohort_concentration": float(concentration),
-            "same_funder_concentration": float(self._same_funder_concentration(unique)),
+            "same_funder_concentration": float(adjusted_funder),
+            "same_funder_concentration_raw": float(raw_funder),
         }
 
     def token_cluster_features(self, token_mint: str) -> dict[str, float]:
