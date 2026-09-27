@@ -9,6 +9,7 @@ from runner_genesis.training import (
     ExecutableLabelConfig,
     TARGETS,
     _future_labels,
+    _roundtrip_return,
     train_genesis_from_dataset,
     walk_forward_evaluate,
 )
@@ -76,3 +77,17 @@ def test_chronological_training_writes_loadable_calibrated_artifact(tmp_path):
     walk = walk_forward_evaluate(dataset, min_train_rows=80, folds=3)
     assert walk["aggregate"]["folds_scored"] >= 2
     assert 0.0 <= walk["aggregate"]["brier"] <= 1.0
+
+
+def test_executable_label_rejects_execution_above_slippage_ceiling():
+    settings = Settings()
+    entry = {"price_usd": 1.0, "liquidity_usd": 100.0}
+    exit_obs = {"price_usd": 3.0, "liquidity_usd": 100.0}
+    uncapped = _roundtrip_return(
+        entry, exit_obs, 10.0, settings.execution, max_slippage_pct=None
+    )
+    capped = _roundtrip_return(
+        entry, exit_obs, 10.0, settings.execution, max_slippage_pct=0.01
+    )
+    assert uncapped is not None
+    assert capped is None
