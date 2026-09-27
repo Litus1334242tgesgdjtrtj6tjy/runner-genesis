@@ -104,6 +104,7 @@ risk:
   max_bundle_pct: 0.30
   max_suspected_related_concentration_pct: 0.35
   max_correlated_exposure_pct: 0.35
+  min_cluster_fraction_for_exposure: 0.50
   min_sellability_score: 0.25
   max_manipulation_risk: 0.78
   kill_switch: false
