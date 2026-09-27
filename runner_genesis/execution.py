@@ -69,7 +69,9 @@ class PaperExecutionEngine:
         fail_p=min(0.50,self.cfg.failed_tx_base_probability + max(0.0,10_000-liq)/10_000*0.08)
         failed=bool(rng.random()<fail_p)
         side='BUY' if p.action in (Action.ENTER,Action.ADD) else 'SELL'
-        requested=float(p.amount_eur) if side=='BUY' else max(0.0,position_quantity*price*float(p.reduce_fraction or 1.0))
+        reduce_fraction=max(0.0,min(1.0,float(p.reduce_fraction or 1.0)))
+        target_qty=max(0.0,float(position_quantity))*reduce_fraction if side=='SELL' else 0.0
+        requested=float(p.amount_eur) if side=='BUY' else target_qty*price
         network_fee=self._network_fee_eur(token)
         if failed:
             return PaperFill(
@@ -78,16 +80,26 @@ class PaperExecutionEngine:
                 None,'NETWORK_ONLY_FAILED_TX',None,0.8 if network_fee>0 else 0.0,network_fee,
             )
         max_fill=max(0.0,liq*self.cfg.max_liquidity_fraction)
-        filled=min(requested,max_fill) if self.cfg.partial_fill_enabled else requested
-        partial=filled+1e-12<requested
-        slip=self.estimate_slippage(filled,liq)
+        reference_filled=min(requested,max_fill) if self.cfg.partial_fill_enabled else requested
+        partial=reference_filled+1e-12<requested
+        slip=self.estimate_slippage(reference_filled,liq)
         direction=1 if side=='BUY' else -1
         exec_price=price*(1+direction*slip)
         fee_quote=self.pump_fees.quote(token)
         protocol_fee_bps=float(fee_quote.protocol_fee_bps) if fee_quote.protocol_fee_bps is not None else float(self.cfg.base_fee_bps)
         fee_rate=(protocol_fee_bps+float(self.cfg.priority_fee_bps))/10000.0
-        fees=filled*fee_rate+network_fee
-        qty=filled/max(exec_price,1e-12)
+        if side=='BUY':
+            filled=reference_filled
+            qty=filled/max(exec_price,1e-12)
+            fee_notional=filled
+        else:
+            # SELL size is defined in token quantity. Slippage changes proceeds, never the
+            # number of tokens sold. Converting EUR notional back through the slipped
+            # execution price would otherwise oversell the requested fraction.
+            qty=min(target_qty, reference_filled/max(price,1e-12))
+            filled=qty*exec_price
+            fee_notional=filled
+        fees=fee_notional*fee_rate+network_fee
         return PaperFill(
             p.token_mint,side,requested,filled,qty,price,exec_price,slip,fees,latency,
             False,partial,now+timedelta(milliseconds=latency),'',
