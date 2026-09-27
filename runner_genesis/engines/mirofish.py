@@ -64,7 +64,8 @@ class MiroFishRolloutEngine:
         cohort_concentration = max(0.0, min(1.0, float(f.get("cohort_concentration", 0.0) or 0.0)))
         same_funder = max(0.0, min(1.0, float(f.get("same_funder_concentration", 0.0) or 0.0)))
         top_independence = max(0.0, min(1.0, float(f.get("top_trader_independence_ratio", 0.0) or 0.0)))
-        independent_breadth = min(1.0, effective_wallets / 4.0) * max(independence, top_independence)
+        independence_mix = 0.70 * independence + 0.30 * top_independence
+        independent_breadth = min(1.0, effective_wallets / 4.0) * independence_mix
         coordinated_risk = max(cohort_concentration * (1.0 - independence), same_funder)
 
         persist_hits = 0
