@@ -100,5 +100,24 @@ class MarketStateStore:
     def resolve_wallet_observation(self, wallet: str, obs: WalletBuyObservation) -> None:
         self.wallet_resolved_history[wallet].add(obs.resolved_at, obs)
 
+    def backfill_wallet_observations(self, wallet: str, observations: list[WalletBuyObservation]) -> int:
+        """Merge historical resolved outcomes while preserving point-in-time ordering.
+
+        Backfills can legitimately contain observations older than values already loaded in
+        memory. Rebuilding the small per-wallet series avoids weakening PointInTimeSeries'
+        chronological append invariant for normal live ingestion.
+        """
+        existing = self.wallet_resolved_history[wallet].values_as_of(datetime.max.replace(tzinfo=observations[0].resolved_at.tzinfo) if observations else datetime.max)
+        merged: dict[tuple, WalletBuyObservation] = {}
+        for obs in [*existing, *observations]:
+            key = (obs.token_mint, obs.event_time, obs.resolved_at)
+            merged[key] = obs
+        series = PointInTimeSeries[WalletBuyObservation]()
+        for obs in sorted(merged.values(), key=lambda x: (x.resolved_at, x.event_time, x.token_mint)):
+            series.add(obs.resolved_at, obs)
+        added = max(0, len(merged) - len(existing))
+        self.wallet_resolved_history[wallet] = series
+        return added
+
     def resolved_wallet_history_as_of(self, wallet: str, as_of: datetime) -> list[WalletBuyObservation]:
         return self.wallet_resolved_history[wallet].values_as_of(as_of)
