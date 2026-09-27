@@ -141,3 +141,21 @@ def test_high_degree_funder_is_downweighted_as_service_hub():
     assert f['same_funder_concentration_raw'] == 1.0
     assert f['same_funder_concentration'] < 0.4
     assert f['effective_wallet_count'] > 5
+
+
+def test_very_high_degree_funder_does_not_create_active_wallet_clique():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    actor = ActorGraphEngine(max_funder_pair_expansion=16)
+    wallets = [f'H{i}' for i in range(40)]
+    for i, w in enumerate(wallets):
+        actor.observe_funding_link(w, 'LARGE_SERVICE', t0+timedelta(seconds=i), 0.95)
+
+    active_wallet_edges = [
+        (a, b) for a, b, d in actor.graph.edges(data=True)
+        if a in wallets and b in wallets and float(d.get('confidence', 0.0)) >= 0.55
+    ]
+    features = actor.cohort_features(wallets)
+    assert active_wallet_edges == []
+    assert features['same_funder_concentration_raw'] == 1.0
+    assert features['same_funder_concentration'] < 0.25
+    assert features['effective_wallet_count'] > 30
