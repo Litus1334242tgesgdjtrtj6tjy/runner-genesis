@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime, timezone, timedelta
 
 from runner_genesis.domain.events import EventType, MarketEvent
@@ -6,6 +7,7 @@ from runner_genesis.engines.cohorts import CohortDiscoveryEngine
 from runner_genesis.ingestion.helius_history import EnhancedWalletHistoryNormalizer, WalletOutcomeBuilder
 from runner_genesis.ingestion.helius import HeliusWebhookNormalizer, HeliusOnChainNormalizer
 from runner_genesis.state_store import MarketStateStore
+from runner_genesis.research_sources import WalletResearchBackfillService
 
 
 WALLET = "Wallet11111111111111111111111111111111111"
@@ -187,3 +189,28 @@ def test_wallet_outcome_does_not_credit_untracked_oversell_proceeds():
     outcomes = WalletOutcomeBuilder().build(events)
     assert len(outcomes) == 1
     assert abs(outcomes[0].realized_return - 1.0) < 1e-12
+
+
+
+class _HistoryClient:
+    async def fetch_transactions(self, wallet, limit=100, max_pages=5):
+        return [{
+            "type": "TRANSFER",
+            "signature": "small-funding",
+            "timestamp": 1_700_000_000,
+            "nativeTransfers": [{
+                "fromUserAccount": "FUNDER_SMALL",
+                "toUserAccount": wallet,
+                "amount": 500_000_000,
+            }],
+        }]
+
+
+@pytest.mark.asyncio
+async def test_backfill_service_honors_configured_funding_threshold():
+    service = WalletResearchBackfillService(
+        _HistoryClient(),
+        min_funding_sol=1.0,
+    )
+    bundle = await service.fetch_wallet_bundle(WALLET)
+    assert bundle.funding_links == []
