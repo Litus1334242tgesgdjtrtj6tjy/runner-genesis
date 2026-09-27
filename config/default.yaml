@@ -142,3 +142,14 @@ external_discovery:
   refresh_seconds: 300
   max_wallets_per_refresh: 25
   top_wallet_backfill_fraction: 0.60
+  wallet_priority_enabled: true
+  wallet_priority_candidate_pool: 200
+  wallet_priority_rank_weight: 0.16
+  wallet_priority_rank_momentum_weight: 0.10
+  wallet_priority_smart_30d_weight: 0.20
+  wallet_priority_emerging_weight: 0.18
+  wallet_priority_recent_activity_weight: 0.12
+  wallet_priority_independence_weight: 0.10
+  wallet_priority_data_gap_weight: 0.08
+  wallet_priority_source_confidence_weight: 0.06
+  wallet_priority_activity_half_life_seconds: 1800
