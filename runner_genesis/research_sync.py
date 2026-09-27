@@ -346,45 +346,31 @@ class ResearchSyncCoordinator:
                 merged["discovery_kind"] = "TOP_LEADERBOARD" if row.get("rank") is not None else merged.get("discovery_kind")
                 qualification_by_wallet[wallet] = merged
 
-        ranked_rows = [x for x in qualification_by_wallet.values() if x.get("rank") is not None]
-        emerging_rows = [x for x in qualification_by_wallet.values() if x.get("rank") is None]
-        ranked_rows.sort(key=lambda x: (int(x.get("rank") or 10**9), -(float(x.get("monthly_pnl") or 0.0))))
-        emerging_rows.sort(
-            key=lambda x: (
-                -(x.get("observed_at").timestamp() if isinstance(x.get("observed_at"), datetime) else 0.0),
-                str(x.get("wallet_address") or ""),
-            )
-        )
+        now = datetime.now(timezone.utc)
+        min_age = max(60.0, float(self.settings.helius_history.refresh_seconds))
+        skipped_recent = 0
 
-        top_fraction = max(0.0, min(1.0, float(self.settings.external_discovery.top_wallet_backfill_fraction)))
-        if ranked_rows and emerging_rows and limit > 1:
-            top_slots = max(1, min(limit - 1, int(round(limit * top_fraction))))
-            emerging_slots = limit - top_slots
-            selected = ranked_rows[:top_slots] + emerging_rows[:emerging_slots]
-            if len(selected) < limit:
-                used = {str(x.get("wallet_address") or "") for x in selected}
-                leftovers = [x for x in ranked_rows[top_slots:] + emerging_rows[emerging_slots:] if str(x.get("wallet_address") or "") not in used]
-                selected.extend(leftovers[: limit - len(selected)])
-        else:
-            selected = (ranked_rows + emerging_rows)[:limit]
+        # Remove recently-qualified wallets before ranking so they do not consume one of
+        # the scarce Helius slots and leave budget unused.
+        eligible: dict[str, dict[str, Any]] = {}
+        for wallet, row in qualification_by_wallet.items():
+            previous = self._last_backfill.get(wallet)
+            if previous is not None and (now - previous).total_seconds() < min_age:
+                skipped_recent += 1
+                continue
+            eligible[wallet] = row
+
+        selected = self._priority_select(eligible, limit=limit, now=now)
 
         backfills = []
-        skipped_recent = 0
         if self.settings.helius_history.enabled and self.settings.helius_api_key and selected:
             client = HeliusWalletHistoryClient(self.settings.helius_api_key)
             service = WalletResearchBackfillService(client, repository=self.engine.repository)
-            now = datetime.now(timezone.utc)
-            min_age = max(60.0, float(self.settings.helius_history.refresh_seconds))
-            due_wallets = []
-            for row in selected:
-                wallet = str(row.get("wallet_address") or "").strip()
-                if not wallet:
-                    continue
-                previous = self._last_backfill.get(wallet)
-                if previous is not None and (now - previous).total_seconds() < min_age:
-                    skipped_recent += 1
-                    continue
-                due_wallets.append(wallet)
+            due_wallets = [
+                str(row.get("wallet_address") or "").strip()
+                for row in selected
+                if str(row.get("wallet_address") or "").strip()
+            ]
 
             semaphore = asyncio.Semaphore(max(1, int(self.settings.helius_history.max_concurrency)))
 
@@ -415,8 +401,7 @@ class ResearchSyncCoordinator:
                     (event for bundle in bundles for event in bundle.events),
                     key=lambda event: (event.timestamp, event.event_id),
                 )
-                for event in actor_events:
-                    self.engine.actor.observe(event)
+                self.engine.actor.observe_historical_batch(actor_events)
 
                 funding_links = sorted(
                     (link for bundle in bundles for link in bundle.funding_links),
