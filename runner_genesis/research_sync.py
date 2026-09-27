@@ -154,7 +154,7 @@ class ResearchSyncCoordinator:
         skipped_recent = 0
         if self.settings.helius_history.enabled and self.settings.helius_api_key:
             client = HeliusWalletHistoryClient(self.settings.helius_api_key)
-            service = WalletResearchBackfillService(client)
+            service = WalletResearchBackfillService(client, repository=self.engine.repository)
             now = datetime.now(timezone.utc)
             min_age = max(60.0, float(self.settings.helius_history.refresh_seconds))
             due_wallets = []
