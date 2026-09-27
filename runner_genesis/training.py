@@ -28,6 +28,32 @@ from .engines.genesis import FEATURE_ORDER
 from .fees import PumpFeeSchedule
 
 
+BENCHMARK_NUMERIC_FEATURES = [
+    "qualified_wallet_count",
+    "top_trader_count",
+    "top_trader_effective_count",
+    "weighted_smart_capital_consensus",
+    "accumulation_score",
+    "conviction_score",
+    "effective_wallet_count",
+    "average_wallet_quality",
+    "average_strategy_match",
+    "entry_distance_price",
+    "entry_distance_market_cap",
+    "sellability_score",
+    "manipulation_risk",
+    "coordinated_dump_risk",
+    "fusion_research_score",
+    "fusion_confidence",
+    "expected_executable_edge",
+    "runner_persistence",
+    "distribution_score",
+    "early_formation_score",
+    "early_formation_entry_headroom",
+    "top_trader_wave_score",
+    "fomo_score",
+]
+
 TARGETS = {
     "genesis_prob": "y_executable_runner",
     "p_x2_15m": "y_x2_15m",
@@ -74,15 +100,26 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
-def _numeric_features(snapshot: dict[str, Any]) -> dict[str, float]:
+def _numeric_features(snapshot: dict[str, Any]) -> dict[str, float | None]:
     features = snapshot.get("features") if isinstance(snapshot.get("features"), dict) else {}
-    out = {}
-    for key in FEATURE_ORDER:
+    out: dict[str, float | None] = {}
+    for key in dict.fromkeys([*FEATURE_ORDER, *BENCHMARK_NUMERIC_FEATURES]):
         value = features.get(key)
+        if value is None:
+            # Model inputs retain their historical zero-imputation semantics. Research
+            # benchmark fields keep UNKNOWN as None so an absent entry-distance value
+            # cannot accidentally pass a timing gate.
+            out[key] = 0.0 if key in FEATURE_ORDER else None
+            continue
         try:
-            out[key] = float(value) if value is not None and not isinstance(value, bool) else 0.0
+            out[key] = float(value) if not isinstance(value, bool) else float(value)
         except (TypeError, ValueError):
-            out[key] = 0.0
+            out[key] = 0.0 if key in FEATURE_ORDER else None
+
+    out["signal_validity_is_valid"] = 1.0 if str(features.get("signal_validity")) == "VALID" else 0.0
+    out["entry_validity_is_valid"] = 1.0 if str(features.get("entry_validity")) == "VALID" else 0.0
+    out["entry_too_late"] = 1.0 if str(features.get("entry_validity")) == "ENTRY_TOO_LATE" else 0.0
+    out["fusion_risk_veto"] = 1.0 if bool(features.get("fusion_risk_veto", False)) else 0.0
     return out
 
 
