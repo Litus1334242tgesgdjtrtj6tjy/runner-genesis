@@ -20,6 +20,7 @@ class ResearchSyncCoordinator:
         self.settings = settings
         self.engine = engine
         self._seen_wallets: set[str] = set()
+        self._last_backfill: dict[str, datetime] = {}
         self._last_sync: datetime | None = None
         self._last_result: dict[str, Any] = {"status": "NOT_RUN"}
 
@@ -37,8 +38,8 @@ class ResearchSyncCoordinator:
             "helius_configured": bool(self.settings.helius_api_key),
             "last_sync": self._last_sync,
             "last_result": self._last_result,
+            "tracked_wallets": len(self._seen_wallets),
         }
-
 
     @staticmethod
     def _callout_observation(row: dict[str, Any], observed_at: datetime) -> dict[str, Any] | None:
@@ -48,6 +49,7 @@ class ResearchSyncCoordinator:
                 if value is not None:
                     return value
             return None
+
         token = first("token_mint", "tokenMint", "token_address", "tokenAddress", "mint", "contract")
         nested_token = row.get("token") if isinstance(row.get("token"), dict) else {}
         if not token:
@@ -57,10 +59,12 @@ class ResearchSyncCoordinator:
                     break
         if not token:
             return None
+
         actor = first("wallet", "wallet_address", "walletAddress", "author", "handle", "user_id", "userId")
         nested_user = row.get("user") if isinstance(row.get("user"), dict) else {}
         if not actor:
             actor = nested_user.get("wallet") or nested_user.get("handle") or nested_user.get("id")
+
         raw_ts = first("timestamp", "created_at", "createdAt", "published_at", "publishedAt")
         ts = observed_at
         if isinstance(raw_ts, (int, float)):
@@ -75,6 +79,7 @@ class ResearchSyncCoordinator:
                     ts = ts.replace(tzinfo=timezone.utc)
             except ValueError:
                 ts = observed_at
+
         return {
             "token_mint": str(token),
             "timestamp": ts,
@@ -82,7 +87,10 @@ class ResearchSyncCoordinator:
             "kind": "PUMP_CALLOUT",
             "confidence": 0.75,
             "actor_key": str(actor) if actor is not None else None,
-            "metadata": {"provider_observed_at": observed_at, "raw_id": first("id", "callout_id", "calloutId")},
+            "metadata": {
+                "provider_observed_at": observed_at,
+                "raw_id": first("id", "callout_id", "calloutId"),
+            },
         }
 
     async def sync_once(self, max_wallets: int | None = None) -> dict[str, Any]:
@@ -100,6 +108,7 @@ class ResearchSyncCoordinator:
             base_url=self.settings.fomoscan_base_url,
         )
         rows, observed_at = await provider.pump_leaderboard()
+
         callout_count = 0
         if self.settings.fomo.enabled:
             try:
@@ -120,7 +129,7 @@ class ResearchSyncCoordinator:
                             "actor_key": obs["actor_key"],
                         })
             except Exception:
-                # Leaderboard sync remains usable even if the optional callout feed changes.
+                # Discovery remains usable even if the optional callout shape changes.
                 callout_count = 0
 
         accepted = self.engine.discovery.ingest_leaderboard(
@@ -142,12 +151,19 @@ class ResearchSyncCoordinator:
         )[: max(0, limit)]
 
         backfills = []
+        skipped_recent = 0
         if self.settings.helius_history.enabled and self.settings.helius_api_key:
             client = HeliusWalletHistoryClient(self.settings.helius_api_key)
             service = WalletResearchBackfillService(client)
+            now = datetime.now(timezone.utc)
+            min_age = max(60.0, float(self.settings.helius_history.refresh_seconds))
             for row in ranked:
                 wallet = str(row.get("wallet_address") or "").strip()
                 if not wallet:
+                    continue
+                previous = self._last_backfill.get(wallet)
+                if previous is not None and (now - previous).total_seconds() < min_age:
+                    skipped_recent += 1
                     continue
                 try:
                     result = await service.backfill_wallet(
@@ -159,6 +175,7 @@ class ResearchSyncCoordinator:
                     )
                     backfills.append(asdict(result))
                     self._seen_wallets.add(wallet)
+                    self._last_backfill[wallet] = now
                 except Exception as exc:
                     backfills.append({
                         "wallet": wallet,
@@ -174,6 +191,7 @@ class ResearchSyncCoordinator:
             "accepted_snapshots": accepted,
             "fomo_callouts_ingested": callout_count,
             "wallet_backfills": backfills,
+            "wallet_backfills_skipped_recent": skipped_recent,
         }
         return self._last_result
 
