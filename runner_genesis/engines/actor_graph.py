@@ -30,6 +30,7 @@ class ActorGraphEngine:
         self.recent_by_token: dict[str, list[MarketEvent]] = defaultdict(list)
         self.funder_to_wallets: dict[str, set[str]] = defaultdict(set)
         self.wallet_to_funders: dict[str, set[str]] = defaultdict(set)
+        self.hub_funders: set[str] = set()
         self.coevent_window = timedelta(seconds=coevent_window_seconds)
         self.max_funder_pair_expansion = max(8, int(max_funder_pair_expansion))
 
