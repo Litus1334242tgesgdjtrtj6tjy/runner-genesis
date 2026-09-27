@@ -157,6 +157,7 @@ class ResearchSyncCoordinator:
             service = WalletResearchBackfillService(client)
             now = datetime.now(timezone.utc)
             min_age = max(60.0, float(self.settings.helius_history.refresh_seconds))
+            due_wallets = []
             for row in ranked:
                 wallet = str(row.get("wallet_address") or "").strip()
                 if not wallet:
@@ -165,23 +166,32 @@ class ResearchSyncCoordinator:
                 if previous is not None and (now - previous).total_seconds() < min_age:
                     skipped_recent += 1
                     continue
-                try:
-                    result = await service.backfill_wallet(
-                        wallet,
-                        self.engine.store,
-                        self.engine.actor,
-                        limit=self.settings.helius_history.page_limit,
-                        max_pages=self.settings.helius_history.max_pages,
-                    )
-                    backfills.append(asdict(result))
-                    self._seen_wallets.add(wallet)
-                    self._last_backfill[wallet] = now
-                except Exception as exc:
-                    backfills.append({
-                        "wallet": wallet,
-                        "error": type(exc).__name__,
-                        "message": str(exc)[:200],
-                    })
+                due_wallets.append(wallet)
+
+            semaphore = asyncio.Semaphore(max(1, int(self.settings.helius_history.max_concurrency)))
+
+            async def run_one(wallet: str):
+                async with semaphore:
+                    try:
+                        result = await service.backfill_wallet(
+                            wallet,
+                            self.engine.store,
+                            self.engine.actor,
+                            limit=self.settings.helius_history.page_limit,
+                            max_pages=self.settings.helius_history.max_pages,
+                        )
+                        self._seen_wallets.add(wallet)
+                        self._last_backfill[wallet] = now
+                        return asdict(result)
+                    except Exception as exc:
+                        return {
+                            "wallet": wallet,
+                            "error": type(exc).__name__,
+                            "message": str(exc)[:200],
+                        }
+
+            if due_wallets:
+                backfills = list(await asyncio.gather(*(run_one(w) for w in due_wallets)))
 
         self._last_sync = datetime.now(timezone.utc)
         self._last_result = {
