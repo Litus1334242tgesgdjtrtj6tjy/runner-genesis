@@ -29,14 +29,31 @@ class MiroFishRolloutEngine:
         if dq < float(self.cfg.require_min_data_quality):
             return {"mirofish_status": "WAITING_DATA", "mirofish_data_quality": dq}
 
+        consensus = float(f.get("weighted_smart_capital_consensus", f.get("smart_money_consensus", 0.0)) or 0.0)
+        accum = float(f.get("accumulation_score", 0.0) or 0.0)
+        top_wave = float(f.get("top_trader_wave_score", 0.0) or 0.0)
+        fomo = float(f.get("fomo_score", 0.0) or 0.0)
+        if not (
+            consensus >= float(self.cfg.trigger_min_consensus)
+            or accum >= float(self.cfg.trigger_min_accumulation)
+            or top_wave >= float(self.cfg.trigger_min_top_trader_wave)
+            or fomo >= float(self.cfg.trigger_min_fomo)
+        ):
+            return {
+                "mirofish_status": "NOT_TRIGGERED",
+                "mirofish_data_quality": dq,
+                "mirofish_trigger_consensus": consensus,
+                "mirofish_trigger_accumulation": accum,
+                "mirofish_trigger_top_trader_wave": top_wave,
+                "mirofish_trigger_fomo": fomo,
+            }
+
         rng = self._rng(mint, decision_time)
         n = max(8, int(self.cfg.num_rollouts))
         steps = max(3, min(30, int(self.cfg.horizon_seconds // 30) or 3))
         deadline = time.perf_counter() + max(float(self.cfg.rollout_timeout_ms), 1.0) / 1000.0
 
-        consensus = float(f.get("weighted_smart_capital_consensus", f.get("smart_money_consensus", 0.0)) or 0.0)
-        accum = float(f.get("accumulation_score", 0.0) or 0.0)
-        persistence = float(f.get("runner_persistence", 0.0) or 0.0)
+        persistence = float(f.get("smart_capital_retention", f.get("runner_holder_retention", 0.0)) or 0.0)
         market = max(-1.0, min(1.0, float(f.get("net_buy_pressure_60s", 0.0) or 0.0)))
         integrity = float(f.get("launch_integrity_score", 0.5) or 0.5)
         dump = float(f.get("coordinated_dump_risk", 0.0) or 0.0)
