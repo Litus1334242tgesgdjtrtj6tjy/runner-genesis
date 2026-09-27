@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, date, timezone
 from typing import Any
 
 
@@ -73,9 +73,20 @@ class PaperAccount:
     positions: dict[str, PaperPosition] = field(default_factory=dict)
     realized_pnl_eur: float = 0.0
     daily_spend_eur: float = 0.0
+    daily_realized_pnl_eur: float = 0.0
+    accounting_day_utc: date | None = None
     peak_equity_eur: float = 0.0
     equity_eur: float = 0.0
 
     def __post_init__(self) -> None:
         self.peak_equity_eur = self.starting_cash_eur
         self.equity_eur = self.starting_cash_eur
+
+    def advance_accounting_day(self, at: datetime) -> None:
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        day = at.astimezone(timezone.utc).date()
+        if self.accounting_day_utc != day:
+            self.accounting_day_utc = day
+            self.daily_spend_eur = 0.0
+            self.daily_realized_pnl_eur = 0.0
