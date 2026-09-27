@@ -28,6 +28,8 @@ class PaperFill:
     fee_schedule_version: str | None = None
     fee_confidence: float = 0.0
     network_fee_eur: float = 0.0
+    risk_cluster_id: str | None = None
+    risk_cluster_fraction: float = 0.0
 
 class PaperExecutionEngine:
     def __init__(self,cfg,seed:int=20260924):
