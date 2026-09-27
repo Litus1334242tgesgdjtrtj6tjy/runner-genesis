@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from collections import deque
 from datetime import datetime, timedelta, timezone
 import numpy as np
 
@@ -104,9 +105,15 @@ class RunnerGenesisOmega:
         self.pending_orders: dict[str, PendingPaperOrder] = {}
         self.alerts = AlertEngine()
         self._persisted_transition_count = 0
+        self._max_processed_event_ids = 200_000
+        self._processed_event_ids: set[str] = set()
+        self._processed_event_order: deque[str] = deque()
+        self._event_result_cache: dict[str, ProcessResult] = {}
+        self._event_result_order: deque[str] = deque()
         db_enabled = bool(settings.features.get('database_persistence', {}).get('enabled', True))
         self.repository = RuntimeRepository(settings.database_url) if db_enabled else None
         if self.repository:
+            self._hydrate_processed_event_ids()
             self._hydrate_research_state()
             self._hydrate_paper_portfolio()
             self._hydrate_pending_paper()
