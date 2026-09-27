@@ -46,8 +46,9 @@ class BackfillResult:
 class WalletResearchBackfillService:
     """Read-only historical wallet qualification service."""
 
-    def __init__(self, client: HeliusWalletHistoryClient) -> None:
+    def __init__(self, client: HeliusWalletHistoryClient, repository=None) -> None:
         self.client = client
+        self.repository = repository
         self.normalizer = EnhancedWalletHistoryNormalizer()
         self.outcomes = WalletOutcomeBuilder()
 
@@ -62,8 +63,13 @@ class WalletResearchBackfillService:
             actor.observe(event)
         for link in sorted(funding, key=lambda x: x.timestamp):
             actor.observe_funding_link(link.wallet, link.funder, link.timestamp, link.confidence)
+            if self.repository:
+                self.repository.record_funding_relationship(link)
         resolved = self.outcomes.build(events)
         added = store.backfill_wallet_observations(wallet, resolved) if resolved else 0
+        if self.repository:
+            for obs in resolved:
+                self.repository.record_wallet_outcome(wallet, obs)
         return BackfillResult(
             wallet=wallet,
             transactions=len(txs),
