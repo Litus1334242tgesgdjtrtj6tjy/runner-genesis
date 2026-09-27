@@ -4,7 +4,7 @@ from runner_genesis.domain.events import EventType, MarketEvent
 from runner_genesis.engines.actor_graph import ActorGraphEngine
 from runner_genesis.engines.cohorts import CohortDiscoveryEngine
 from runner_genesis.ingestion.helius_history import EnhancedWalletHistoryNormalizer, WalletOutcomeBuilder
-from runner_genesis.ingestion.helius import HeliusWebhookNormalizer
+from runner_genesis.ingestion.helius import HeliusWebhookNormalizer, HeliusOnChainNormalizer
 from runner_genesis.state_store import MarketStateStore
 
 
@@ -135,3 +135,40 @@ def test_generic_webhook_refuses_swap_settlement_as_transfer():
         }],
     }
     assert HeliusWebhookNormalizer().normalize(payload) == []
+
+
+def test_onchain_normalizer_separates_creation_and_migration():
+    n = HeliusOnChainNormalizer()
+    base = {
+        "signature": "sig",
+        "timestamp": 1_700_000_000,
+        "summary": {"type": "other"},
+    }
+    create_payload = {
+        **base,
+        "instructions": [{
+            "instructionName": "create",
+            "programId": "PUMP_PROGRAM",
+            "decoded": {"accounts": [
+                {"name": "mint", "pubkey": MINT},
+                {"name": "creator", "pubkey": WALLET},
+            ]},
+        }],
+    }
+    migration_payload = {
+        **base,
+        "signature": "sig2",
+        "instructions": [{
+            "instructionName": "migrate",
+            "programId": "PUMPSWAP_PROGRAM",
+            "decoded": {"accounts": [
+                {"name": "base_mint", "pubkey": MINT},
+                {"name": "user", "pubkey": WALLET},
+            ]},
+        }],
+    }
+    created = n.normalize(create_payload)
+    migrated = n.normalize(migration_payload)
+    assert created[0].event_type == EventType.TOKEN_CREATED
+    assert migrated[0].event_type == EventType.MIGRATION
+    assert migrated[0].metadata["program_id"] == "PUMPSWAP_PROGRAM"
