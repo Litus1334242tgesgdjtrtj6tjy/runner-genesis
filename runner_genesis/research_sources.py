@@ -147,9 +147,23 @@ class FomoScanPumpProvider:
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.get(f"{self.base_url}{path}", headers=headers, params=params or {})
-            response.raise_for_status()
-            body = response.json()
+            response = None
+            for attempt in range(self.max_retries + 1):
+                response = await client.get(f"{self.base_url}{path}", headers=headers, params=params or {})
+                retryable = response.status_code == 429 or 500 <= response.status_code < 600
+                if retryable and attempt < self.max_retries:
+                    raw = response.headers.get("retry-after")
+                    try:
+                        wait = float(raw) if raw is not None else 0.5 * (2 ** attempt)
+                    except (TypeError, ValueError):
+                        wait = 0.5 * (2 ** attempt)
+                    await asyncio.sleep(max(0.1, min(8.0, wait)))
+                    continue
+                response.raise_for_status()
+                break
+        if response is None:
+            raise RuntimeError("FomoScan request did not return a response")
+        body = response.json()
         if not isinstance(body, dict):
             return {"data": body, "meta": {}}
         return body
