@@ -122,7 +122,19 @@ class ExternalDiscoveryConfig(BaseModel):
     auto_refresh: bool = False
     refresh_seconds: float = 300.0
     max_wallets_per_refresh: int = 25
+    # Legacy split kept for config compatibility; priority scoring supersedes it when enabled.
     top_wallet_backfill_fraction: float = 0.60
+    wallet_priority_enabled: bool = True
+    wallet_priority_candidate_pool: int = 200
+    wallet_priority_rank_weight: float = 0.16
+    wallet_priority_rank_momentum_weight: float = 0.10
+    wallet_priority_smart_30d_weight: float = 0.20
+    wallet_priority_emerging_weight: float = 0.18
+    wallet_priority_recent_activity_weight: float = 0.12
+    wallet_priority_independence_weight: float = 0.10
+    wallet_priority_data_gap_weight: float = 0.08
+    wallet_priority_source_confidence_weight: float = 0.06
+    wallet_priority_activity_half_life_seconds: float = 1800.0
 
 
 class Settings(BaseModel):
