@@ -12,6 +12,8 @@ from runner_genesis.training import (
     _roundtrip_return,
     train_genesis_from_dataset,
     walk_forward_evaluate,
+    _with_label_availability,
+    _purge_before_boundary,
 )
 
 
@@ -34,6 +36,7 @@ def test_future_labels_use_delayed_executable_entry_and_future_only():
     assert labels is not None
     assert labels["label_entry_time"] == t0 + timedelta(seconds=60)
     assert labels["label_entry_price"] == 1.0
+    assert labels["label_available_at"] == t0 + timedelta(hours=1)
     assert labels["y_x2_15m"] == 1
     assert labels["y_x3_30m"] == 1
     assert labels["y_x5_60m"] == 1
@@ -41,7 +44,7 @@ def test_future_labels_use_delayed_executable_entry_and_future_only():
 
 def test_chronological_training_writes_loadable_calibrated_artifact(tmp_path):
     n = 120
-    times = pd.date_range("2026-01-01", periods=n, freq="min", tz="UTC")
+    times = pd.date_range("2026-01-01", periods=n, freq="2h", tz="UTC")
     rows = []
     target_columns = sorted(set(TARGETS.values()))
     for i in range(n):
@@ -91,3 +94,18 @@ def test_executable_label_rejects_execution_above_slippage_ceiling():
     )
     assert uncapped is not None
     assert capped is None
+
+
+
+def test_label_availability_purge_removes_boundary_leakage():
+    times = pd.to_datetime([
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:30:00Z",
+        "2026-01-01T01:00:00Z",
+    ])
+    df = pd.DataFrame({"decision_time": times})
+    prepared = _with_label_availability(df, default_horizon_seconds=3600)
+    boundary = pd.Timestamp("2026-01-01T01:30:00Z")
+    eligible = _purge_before_boundary(prepared, boundary)
+    assert list(eligible["decision_time"]) == [pd.Timestamp("2026-01-01T00:00:00Z")]
+    assert all(eligible["label_available_at"] < boundary)
