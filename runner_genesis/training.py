@@ -205,6 +205,9 @@ def _future_labels(
         return None
 
     result: dict[str, Any] = {
+        # A label is not knowable at decision time. Keep the timestamp at which the full
+        # longest horizon becomes observable so temporal splits can purge boundary rows.
+        "label_available_at": decision_time + timedelta(seconds=max(label_cfg.horizons_seconds)),
         "label_entry_time": entry["timestamp"],
         "label_entry_price": entry["price_usd"],
         "label_entry_liquidity": entry["liquidity_usd"],
@@ -336,6 +339,24 @@ def build_executable_dataset(
     return df
 
 
+def _with_label_availability(df: pd.DataFrame, default_horizon_seconds: int = 3600) -> pd.DataFrame:
+    """Normalize the time when each future-derived label became knowable."""
+    out = df.copy()
+    out["decision_time"] = pd.to_datetime(out["decision_time"], utc=True)
+    if "label_available_at" in out.columns:
+        parsed = pd.to_datetime(out["label_available_at"], utc=True, errors="coerce")
+        fallback = out["decision_time"] + pd.to_timedelta(default_horizon_seconds, unit="s")
+        out["label_available_at"] = parsed.fillna(fallback)
+    else:
+        out["label_available_at"] = out["decision_time"] + pd.to_timedelta(default_horizon_seconds, unit="s")
+    return out
+
+
+def _purge_before_boundary(frame: pd.DataFrame, boundary: pd.Timestamp) -> pd.DataFrame:
+    """Rows are trainable only when their labels were available before next-period start."""
+    return frame.loc[frame["label_available_at"] < boundary].copy()
+
+
 def _safe_metric(y: np.ndarray, p: np.ndarray) -> dict[str, float | None]:
     out: dict[str, float | None] = {
         "brier": float(brier_score_loss(y, p)),
@@ -359,7 +380,7 @@ def train_genesis_from_dataset(
     df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
     if "decision_time" not in df:
         raise ValueError("dataset requires decision_time")
-    df["decision_time"] = pd.to_datetime(df["decision_time"], utc=True)
+    df = _with_label_availability(df)
     df = df.sort_values("decision_time").reset_index(drop=True)
     if len(df) < int(min_rows):
         raise ValueError(f"need at least {min_rows} labeled rows, got {len(df)}")
@@ -368,11 +389,16 @@ def train_genesis_from_dataset(
     train_end = max(1, int(n * 0.70))
     val_end = max(train_end + 1, int(n * 0.85))
     val_end = min(val_end, n - 1)
-    train = df.iloc[:train_end]
-    val = df.iloc[train_end:val_end]
-    test = df.iloc[val_end:]
-    if len(val) == 0 or len(test) == 0:
-        raise ValueError("chronological validation/test splits are empty")
+    val_start_time = df.iloc[train_end]["decision_time"]
+    test_start_time = df.iloc[val_end]["decision_time"]
+
+    raw_train = df.iloc[:train_end]
+    raw_val = df.iloc[train_end:val_end]
+    test = df.iloc[val_end:].copy()
+    train = _purge_before_boundary(raw_train, val_start_time)
+    val = _purge_before_boundary(raw_val, test_start_time)
+    if len(train) == 0 or len(val) == 0 or len(test) == 0:
+        raise ValueError("purged chronological train/validation/test splits are empty")
 
     X_train = train.reindex(columns=FEATURE_ORDER, fill_value=0.0).fillna(0.0).astype(float).to_numpy()
     X_val = val.reindex(columns=FEATURE_ORDER, fill_value=0.0).fillna(0.0).astype(float).to_numpy()
@@ -413,6 +439,8 @@ def train_genesis_from_dataset(
             "train_rows": len(train),
             "validation_rows": len(val),
             "test_rows": len(test),
+            "purged_train_rows": len(raw_train) - len(train),
+            "purged_validation_rows": len(raw_val) - len(val),
             "train_positive_rate": float(np.mean(y_train)),
             "validation_positive_rate": float(np.mean(y_val)),
             "test_positive_rate": float(np.mean(y_test)),
@@ -434,6 +462,11 @@ def train_genesis_from_dataset(
             "train_rows": len(train),
             "validation_rows": len(val),
             "test_rows": len(test),
+            "raw_train_rows": len(raw_train),
+            "raw_validation_rows": len(raw_val),
+            "label_availability_purge": True,
+            "validation_start": str(val_start_time),
+            "test_start": str(test_start_time),
         },
         "metrics": metrics,
         "skipped_targets": skipped,
@@ -461,7 +494,7 @@ def walk_forward_evaluate(
     df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
     if target not in df or "decision_time" not in df:
         raise ValueError(f"dataset requires decision_time and {target}")
-    df["decision_time"] = pd.to_datetime(df["decision_time"], utc=True)
+    df = _with_label_availability(df)
     df = df.sort_values("decision_time").reset_index(drop=True)
     n = len(df)
     min_train_rows = max(20, int(min_train_rows))
@@ -479,14 +512,32 @@ def walk_forward_evaluate(
         test_end = n if fold == folds - 1 else min(n, test_start + block)
         if test_start >= n or test_end <= test_start:
             continue
-        history = df.iloc[:test_start]
+        test = df.iloc[test_start:test_end].copy()
+        test_boundary = test.iloc[0]["decision_time"]
+        raw_history = df.iloc[:test_start]
+        history = _purge_before_boundary(raw_history, test_boundary)
         calibration_rows = max(10, int(len(history) * 0.20))
         fit_end = len(history) - calibration_rows
-        if fit_end < 20:
+        if fit_end < 20 or calibration_rows >= len(history):
+            fold_results.append({
+                "fold": fold,
+                "status": "SKIP_INSUFFICIENT_PURGED_HISTORY",
+                "raw_history_rows": len(raw_history),
+                "eligible_history_rows": len(history),
+            })
             continue
-        fit = history.iloc[:fit_end]
-        calibration = history.iloc[fit_end:]
-        test = df.iloc[test_start:test_end]
+        raw_fit = history.iloc[:fit_end]
+        calibration = history.iloc[fit_end:].copy()
+        calibration_boundary = calibration.iloc[0]["decision_time"]
+        fit = _purge_before_boundary(raw_fit, calibration_boundary)
+        if len(fit) < 20:
+            fold_results.append({
+                "fold": fold,
+                "status": "SKIP_INSUFFICIENT_PURGED_FIT",
+                "raw_fit_rows": len(raw_fit),
+                "fit_rows": len(fit),
+            })
+            continue
 
         y_fit = fit[target].astype(int).to_numpy()
         y_cal = calibration[target].astype(int).to_numpy()
@@ -520,6 +571,8 @@ def walk_forward_evaluate(
             "fit_rows": len(fit),
             "calibration_rows": len(calibration),
             "test_rows": len(test),
+            "purged_history_rows": len(raw_history) - len(history),
+            "purged_fit_rows": len(raw_fit) - len(fit),
             "train_end": str(history.iloc[-1]["decision_time"]),
             "test_start": str(test.iloc[0]["decision_time"]),
             "test_end": str(test.iloc[-1]["decision_time"]),
