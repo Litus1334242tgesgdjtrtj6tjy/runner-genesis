@@ -4,6 +4,7 @@ from runner_genesis.config import Settings
 from runner_genesis.db import RuntimeRepository
 from runner_genesis.domain.state import WalletBuyObservation
 from runner_genesis.ingestion.helius_history import FundingLink
+from runner_genesis.execution import PaperFill
 from runner_genesis.orchestrator import RunnerGenesisOmega
 
 
@@ -67,3 +68,36 @@ def test_persisted_pump_leaderboard_hydrates_after_restart(tmp_path):
     )
     assert ctx["pump_top_trader_present"] == 1.0
     assert ctx["pump_rank"] == 7
+
+
+def test_persisted_paper_fill_restores_open_position_after_restart(tmp_path):
+    db = tmp_path / "paper_restart.db"
+    url = f"sqlite:///{db}"
+    repo = RuntimeRepository(url)
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fill = PaperFill(
+        token_mint="MINT",
+        side="BUY",
+        requested_eur=10.0,
+        filled_eur=10.0,
+        quantity=10.0,
+        reference_price=1.0,
+        execution_price=1.0,
+        slippage_pct=0.0,
+        fees_eur=0.10,
+        latency_ms=100.0,
+        failed=False,
+        partial=False,
+        timestamp=t0,
+    )
+    repo.record_fill(fill)
+
+    settings = Settings(database_url=url, paper_starting_capital_eur=300.0)
+    settings.features["database_persistence"] = {"enabled": True}
+    engine = RunnerGenesisOmega(settings)
+    account = engine.portfolio.account
+
+    assert len(engine.portfolio.fills) == 1
+    assert "MINT" in account.positions
+    assert abs(account.cash_eur - 289.90) < 1e-9
+    assert abs(account.positions["MINT"].quantity - 10.0) < 1e-9
