@@ -24,6 +24,10 @@ jobs:
           pip install -e ".[dev]"
       - name: Pytest
         run: python -m pytest -q
+      - name: Backtest smoke
+        run: python -m runner_genesis.cli backtest data/demo/demo_events.jsonl
+      - name: Ablation smoke
+        run: python -m runner_genesis.cli ablation data/demo/demo_events.jsonl > /tmp/ablation.json
 
   frontend-build:
     runs-on: ubuntu-latest
