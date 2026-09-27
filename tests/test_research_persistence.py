@@ -101,3 +101,70 @@ def test_persisted_paper_fill_restores_open_position_after_restart(tmp_path):
     assert "MINT" in account.positions
     assert abs(account.cash_eur - 289.90) < 1e-9
     assert abs(account.positions["MINT"].quantity - 10.0) < 1e-9
+
+
+def test_delayed_paper_signal_restores_after_restart(tmp_path):
+    db = tmp_path / "pending_restart.db"
+    url = f"sqlite:///{db}"
+    repo = RuntimeRepository(url)
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    due = t0.replace(minute=1)
+    repo.record_paper_update(
+        "MINT_PENDING",
+        t0,
+        "PENDING_ENTER",
+        {
+            "due_time": due,
+            "amount_eur": 12.0,
+            "fusion_research_score": 0.8,
+            "fusion_confidence": 0.7,
+            "weighted_smart_capital_consensus": 0.75,
+            "top_trader_wave_score": 0.6,
+        },
+    )
+
+    settings = Settings(database_url=url, paper_starting_capital_eur=300.0)
+    settings.features["database_persistence"] = {"enabled": True}
+    engine = RunnerGenesisOmega(settings)
+
+    assert "MINT_PENDING" in engine.pending_orders
+    pending = engine.pending_orders["MINT_PENDING"]
+    assert pending.proposal.amount_eur == 12.0
+    assert pending.due_time == due
+    assert "RESTORED_DELAYED_PAPER_SIGNAL" in pending.proposal.reasons
+
+
+def test_persisted_fill_prevents_duplicate_pending_restore(tmp_path):
+    db = tmp_path / "pending_filled.db"
+    url = f"sqlite:///{db}"
+    repo = RuntimeRepository(url)
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    due = t0.replace(minute=1)
+    repo.record_paper_update(
+        "MINT_DONE",
+        t0,
+        "PENDING_ENTER",
+        {"due_time": due, "amount_eur": 10.0},
+    )
+    repo.record_fill(PaperFill(
+        token_mint="MINT_DONE",
+        side="BUY",
+        requested_eur=10.0,
+        filled_eur=10.0,
+        quantity=10.0,
+        reference_price=1.0,
+        execution_price=1.0,
+        slippage_pct=0.0,
+        fees_eur=0.0,
+        latency_ms=10.0,
+        failed=False,
+        partial=False,
+        timestamp=due,
+    ))
+
+    settings = Settings(database_url=url, paper_starting_capital_eur=300.0)
+    settings.features["database_persistence"] = {"enabled": True}
+    engine = RunnerGenesisOmega(settings)
+
+    assert "MINT_DONE" not in engine.pending_orders
+    assert "MINT_DONE" in engine.portfolio.account.positions
