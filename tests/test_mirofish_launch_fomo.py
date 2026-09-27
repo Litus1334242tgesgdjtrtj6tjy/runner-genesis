@@ -44,3 +44,18 @@ def test_fomo_optional_and_point_in_time_window():
     eng.ingest({'token_mint':'M','timestamp':t+timedelta(seconds=10),'source':'FUTURE','actor_key':'c','confidence':1.0})
     f = eng.features('M', t)
     assert f['fomo_independent_source_count'] == 2
+
+
+def test_mirofish_skips_low_signal_candidates_even_when_enabled():
+    cfg = MiroFishConfig(enabled=True, require_min_data_quality=0.0)
+    m = MiroFishRolloutEngine(cfg)
+    t = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    f = {
+        'data_quality_score': 0.9,
+        'weighted_smart_capital_consensus': 0.0,
+        'accumulation_score': 0.0,
+        'top_trader_wave_score': 0.0,
+        'fomo_score': 0.0,
+    }
+    out = m.rollouts('M', t, f)
+    assert out['mirofish_status'] == 'NOT_TRIGGERED'
