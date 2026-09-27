@@ -127,6 +127,55 @@ class RolloutSummaryRow(Base):
     payload_json: Mapped[str] = mapped_column(Text)
 
 
+class PaperTradeUpdateRow(Base):
+    __tablename__ = 'paper_trade_updates'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token_mint: Mapped[str] = mapped_column(String(128), index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    update_type: Mapped[str] = mapped_column(String(64), index=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
+class BacktestRunRow(Base):
+    __tablename__ = 'backtest_runs'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    variant: Mapped[str] = mapped_column(String(128), index=True)
+    dataset_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
+class BacktestMetricRow(Base):
+    __tablename__ = 'backtest_metrics'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(128), index=True)
+    metric_name: Mapped[str] = mapped_column(String(128), index=True)
+    metric_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    slice_key: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
+class ModelVersionRow(Base):
+    __tablename__ = 'model_versions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_name: Mapped[str] = mapped_column(String(128), index=True)
+    model_version: Mapped[str] = mapped_column(String(128), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(64), index=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+    __table_args__ = (UniqueConstraint('model_name', 'model_version', name='uq_model_name_version'),)
+
+
+class ExperimentResultRow(Base):
+    __tablename__ = 'experiment_results'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    experiment_id: Mapped[str] = mapped_column(String(128), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    variant: Mapped[str] = mapped_column(String(128), index=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
 def make_session_factory(url: str):
     engine = create_engine(url, future=True)
     Base.metadata.create_all(engine)
@@ -219,4 +268,34 @@ class RuntimeRepository:
             return
         with self.Session() as s:
             s.add(RolloutSummaryRow(token_mint=mint, observed_at=observed_at, model='MIROFISH', payload_json=_json(payload)))
+            s.commit()
+
+    def record_paper_update(self, mint: str, observed_at: datetime, update_type: str, payload: dict) -> None:
+        with self.Session() as s:
+            s.add(PaperTradeUpdateRow(token_mint=mint, observed_at=observed_at, update_type=update_type, payload_json=_json(payload)))
+            s.commit()
+
+    def record_backtest_run(self, run_id: str, created_at: datetime, variant: str, payload: dict, dataset_id: str | None = None) -> None:
+        with self.Session() as s:
+            s.add(BacktestRunRow(run_id=run_id, created_at=created_at, variant=variant, dataset_id=dataset_id, payload_json=_json(payload)))
+            s.commit()
+
+    def record_backtest_metrics(self, run_id: str, metrics: dict, slice_key: str | None = None) -> None:
+        with self.Session() as s:
+            for name, value in metrics.items():
+                numeric = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+                s.add(BacktestMetricRow(run_id=run_id, metric_name=str(name), metric_value=numeric, slice_key=slice_key, payload_json=_json({"value": value})))
+            s.commit()
+
+    def record_model_version(self, model_name: str, model_version: str, created_at: datetime, status: str, payload: dict) -> None:
+        with self.Session() as s:
+            s.add(ModelVersionRow(model_name=model_name, model_version=model_version, created_at=created_at, status=status, payload_json=_json(payload)))
+            try:
+                s.commit()
+            except IntegrityError:
+                s.rollback()
+
+    def record_experiment(self, experiment_id: str, created_at: datetime, variant: str, payload: dict) -> None:
+        with self.Session() as s:
+            s.add(ExperimentResultRow(experiment_id=experiment_id, created_at=created_at, variant=variant, payload_json=_json(payload)))
             s.commit()
