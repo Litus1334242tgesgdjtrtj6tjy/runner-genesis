@@ -157,6 +157,7 @@ def _future_labels(
     decision_time: datetime,
     execution_cfg,
     label_cfg: ExecutableLabelConfig,
+    max_slippage_pct: float | None = None,
 ) -> dict[str, Any] | None:
     if not observations:
         return None
@@ -183,7 +184,7 @@ def _future_labels(
         returns = []
         sizes = []
         for row in rows:
-            rr = _roundtrip_return(entry, row, label_cfg.default_position_eur, execution_cfg)
+            rr = _roundtrip_return(entry, row, label_cfg.default_position_eur, execution_cfg, max_slippage_pct=max_slippage_pct)
             if rr is None:
                 continue
             ret, executable = rr
