@@ -10,6 +10,12 @@ class HeliusWebhookNormalizer:
     by an upstream parser that has verified the mint.
     """
     def normalize(self,payload:dict)->list[MarketEvent]:
+        # A SWAP's token-transfer legs are settlement mechanics, not wallet-to-wallet
+        # transfer evidence. Parsed Streams/Parsed Events should supply BUY/SELL for swaps.
+        # If an Enhanced webhook only says SWAP, refusing it is safer than manufacturing
+        # DIRECT_TRANSFER relationships to pools or routing accounts.
+        if str(payload.get('type') or '').upper() == 'SWAP':
+            return []
         out=[]
         sig=payload.get('signature') or payload.get('transactionSignature')
         ts=payload.get('timestamp') or payload.get('blockTime')
