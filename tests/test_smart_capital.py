@@ -259,6 +259,18 @@ def test_smart_30d_score_is_not_boosted_by_old_resolved_wins():
         WalletQualityEngine(),
         PumpDiscoveryEngine(PumpDiscoveryConfig()),
     )
+    for i in range(30):
+        resolved = now - timedelta(days=90-i)
+        store.resolve_wallet_observation('WITH_OLD', WalletBuyObservation(
+            event_time=resolved-timedelta(days=1),
+            resolved_at=resolved,
+            token_mint=f'OLD{i}',
+            buy_eur=100,
+            realized_return=5.0,
+            runner_capture_ratio=0.9,
+            hold_seconds=12*3600,
+        ))
+
     recent = [
         WalletBuyObservation(
             event_time=now-timedelta(days=10-i),
@@ -274,16 +286,6 @@ def test_smart_30d_score_is_not_boosted_by_old_resolved_wins():
     for obs in recent:
         store.resolve_wallet_observation('WITH_OLD', obs)
         store.resolve_wallet_observation('RECENT_ONLY', WalletBuyObservation(**obs.__dict__))
-    for i in range(30):
-        store.resolve_wallet_observation('WITH_OLD', WalletBuyObservation(
-            event_time=now-timedelta(days=100+i),
-            resolved_at=now-timedelta(days=60+i),
-            token_mint=f'OLD{i}',
-            buy_eur=100,
-            realized_return=5.0,
-            runner_capture_ratio=0.9,
-            hold_seconds=12*3600,
-        ))
 
     with_old = smart.wallet_metrics_window('WITH_OLD', now, store, 30)
     recent_only = smart.wallet_metrics_window('RECENT_ONLY', now, store, 30)
