@@ -12,6 +12,7 @@ def main():
     sub=ap.add_subparsers(dest='cmd',required=True)
     s=sub.add_parser('demo'); s.add_argument('--out',default='data/demo/demo_events.jsonl')
     s=sub.add_parser('backtest'); s.add_argument('file')
+    s=sub.add_parser('ablation'); s.add_argument('file')
     s=sub.add_parser('replay'); s.add_argument('file')
     s=sub.add_parser('flywire-preprocess'); s.add_argument('connections'); s.add_argument('--out',default='artifacts/flywire'); s.add_argument('--max-nodes',type=int,default=20000); s.add_argument('--min-syn-count',type=int,default=2)
     s=sub.add_parser('serve'); s.add_argument('--host',default='127.0.0.1'); s.add_argument('--port',type=int,default=8000)
@@ -28,6 +29,10 @@ def main():
         from .shadow import run_shadow
         settings=load_settings(args.config); settings.mode='LIVE_SHADOW'; settings.live_trading=False
         asyncio.run(run_shadow(settings,args.program or None)); return
+    if args.cmd=='ablation':
+        from .experiments import AblationRunner
+        settings=load_settings(args.config)
+        print(json.dumps(AblationRunner(settings).run(args.file), indent=2, default=str)); return
     settings=load_settings(args.config); engine=RunnerGenesisOmega(settings)
     metrics=Backtester(engine).run(args.file)
     print(json.dumps(metrics.__dict__,indent=2))
