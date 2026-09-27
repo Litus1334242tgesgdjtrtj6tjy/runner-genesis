@@ -86,7 +86,7 @@ def _numeric_features(snapshot: dict[str, Any]) -> dict[str, float]:
     return out
 
 
-def _event_observation(row: EventRow) -> dict[str, Any] | None:
+def _event_observation(row: EventRow, execution_cfg=None) -> dict[str, Any] | None:
     try:
         payload = json.loads(row.payload_json)
     except Exception:
@@ -110,6 +110,19 @@ def _event_observation(row: EventRow) -> dict[str, Any] | None:
         market_cap_usd=payload.get("market_cap_usd"),
     )
     fee_quote = PumpFeeSchedule().quote(synthetic)
+    network_fee_eur = 0.0
+    if execution_cfg is not None:
+        try:
+            sol_usd = float(meta.get("sol_usd")) if meta.get("sol_usd") is not None else None
+        except (TypeError, ValueError):
+            sol_usd = None
+        if sol_usd and sol_usd > 0:
+            lamports = (
+                max(0, int(execution_cfg.network_base_fee_lamports))
+                * max(1, int(execution_cfg.network_signature_count))
+                + max(0, int(execution_cfg.network_priority_fee_lamports))
+            )
+            network_fee_eur = float(lamports) * 1e-9 * sol_usd
     return {
         "timestamp": _aware(row.timestamp),
         "price_usd": price,
@@ -117,6 +130,7 @@ def _event_observation(row: EventRow) -> dict[str, Any] | None:
         "event_id": row.event_id,
         "protocol_fee_bps": fee_quote.protocol_fee_bps,
         "fee_source": fee_quote.source,
+        "network_fee_eur": network_fee_eur,
     }
 
 
@@ -142,7 +156,7 @@ def _roundtrip_return(entry: dict[str, Any], exit_obs: dict[str, Any], requested
     if entry_protocol_bps is None:
         entry_protocol_bps = float(execution_cfg.base_fee_bps)
     entry_fee_rate = (float(entry_protocol_bps) + float(execution_cfg.priority_fee_bps)) / 10000.0
-    entry_fee = filled * entry_fee_rate
+    entry_fee = filled * entry_fee_rate + float(entry.get("network_fee_eur") or 0.0)
     quantity = filled / max(buy_price, 1e-12)
 
     ref_exit_notional = quantity * float(exit_obs["price_usd"])
@@ -162,7 +176,7 @@ def _roundtrip_return(entry: dict[str, Any], exit_obs: dict[str, Any], requested
     if exit_protocol_bps is None:
         exit_protocol_bps = float(execution_cfg.base_fee_bps)
     exit_fee_rate = (float(exit_protocol_bps) + float(execution_cfg.priority_fee_bps)) / 10000.0
-    exit_fee = proceeds * exit_fee_rate
+    exit_fee = proceeds * exit_fee_rate + float(exit_obs.get("network_fee_eur") or 0.0)
 
     # Compare like-for-like capital if only a partial exit is executable.
     allocated_entry_cost = (filled + entry_fee) * executable_fraction
@@ -268,7 +282,7 @@ def build_executable_dataset(
         ).scalars().all()
 
     for row in events:
-        obs = _event_observation(row)
+        obs = _event_observation(row, settings.execution)
         if obs is not None:
             by_token.setdefault(row.token_mint, []).append(obs)
 
