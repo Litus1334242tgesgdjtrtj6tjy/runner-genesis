@@ -17,6 +17,8 @@ def main():
     s=sub.add_parser('flywire-preprocess'); s.add_argument('connections'); s.add_argument('--out',default='artifacts/flywire'); s.add_argument('--max-nodes',type=int,default=20000); s.add_argument('--min-syn-count',type=int,default=2)
     s=sub.add_parser('serve'); s.add_argument('--host',default='127.0.0.1'); s.add_argument('--port',type=int,default=8000)
     sub.add_parser('doctor')
+    s=sub.add_parser('build-dataset'); s.add_argument('--out',default='data/training/executable_runner.csv')
+    s=sub.add_parser('train-genesis'); s.add_argument('dataset'); s.add_argument('--out',default='artifacts/models/genesis_model.joblib'); s.add_argument('--min-rows',type=int,default=100)
     s=sub.add_parser('shadow'); s.add_argument('--program',action='append',default=[])
     args=ap.parse_args()
     if args.cmd=='demo': print(make_demo(args.out)); return
@@ -29,6 +31,15 @@ def main():
         from .diagnostics import doctor_json
         settings=load_settings(args.config)
         print(doctor_json(settings)); return
+    if args.cmd=='build-dataset':
+        from .training import build_executable_dataset
+        settings=load_settings(args.config)
+        df=build_executable_dataset(settings.database_url, settings, args.out)
+        print(json.dumps({'rows':len(df),'out':args.out},indent=2)); return
+    if args.cmd=='train-genesis':
+        from .training import train_genesis_from_dataset
+        report=train_genesis_from_dataset(args.dataset,args.out,min_rows=args.min_rows)
+        print(json.dumps({'out':args.out,'report':report},indent=2,default=str)); return
     if args.cmd=='shadow':
         import asyncio
         from .shadow import run_shadow
