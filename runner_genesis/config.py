@@ -109,6 +109,16 @@ class PersistenceConfig(BaseModel):
     enabled: bool = True
 
 
+class EarlyFormationConfig(BaseModel):
+    enabled: bool = True
+    lookback_seconds: float = 60.0
+    history_seconds: float = 300.0
+    min_elapsed_seconds: float = 20.0
+    max_price_runup_for_headroom: float = 0.60
+    watch_threshold: float = 0.35
+    forming_threshold: float = 0.55
+
+
 class HeliusHistoryConfig(BaseModel):
     enabled: bool = True
     page_limit: int = 100
@@ -154,6 +164,7 @@ class Settings(BaseModel):
     mirofish: MiroFishConfig = Field(default_factory=MiroFishConfig)
     pump_discovery: PumpDiscoveryConfig = Field(default_factory=PumpDiscoveryConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
+    early_formation: EarlyFormationConfig = Field(default_factory=EarlyFormationConfig)
     helius_history: HeliusHistoryConfig = Field(default_factory=HeliusHistoryConfig)
     external_discovery: ExternalDiscoveryConfig = Field(default_factory=ExternalDiscoveryConfig)
     point_in_time: dict[str, Any] = Field(default_factory=lambda: {"strict": True})
