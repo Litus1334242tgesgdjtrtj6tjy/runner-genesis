@@ -80,6 +80,15 @@ mirofish:
 persistence:
   enabled: true
 
+early_formation:
+  enabled: true
+  lookback_seconds: 60
+  history_seconds: 300
+  min_elapsed_seconds: 20
+  max_price_runup_for_headroom: 0.60
+  watch_threshold: 0.35
+  forming_threshold: 0.55
+
 risk:
   max_position_eur: 25.0
   max_account_pct_per_trade: 0.08
