@@ -2,29 +2,34 @@
 
 PAPER/SHADOW/BACKTEST research system for detecting early Solana memecoin runner formation, reconstructing Smart Capital behavior and testing signals against realistic execution frictions.
 
-**Safety:** LIVE_TRADING=false by default. The repository contains no private-key handling and no live order sender.
+**Safety:** `LIVE_TRADING=false` by default. The repository contains no private-key handling and no live order sender.
 
 ## Current flow
 
-Solana/Pump events -> exact-mint gate -> wallet quality + Actor/Funding Graph -> Pump top-wallet / Emerging Smart Wallet context -> Smart Capital -> Launch Integrity + Market/Hawkes/Flow -> World Model -> FlyWire + MiroFish -> Multi-Brain Fusion -> AI Paper Trader -> Risk Governor -> delayed PAPER execution -> persistence/review.
+Solana/Pump events -> exact-mint gate -> wallet quality + Actor/Funding Graph -> Pump top-wallet / Emerging Smart Wallet / wallet-priority research -> Smart Capital -> probabilistic clan alpha/risk -> Early Formation -> Launch Integrity + Market/Hawkes/Flow -> World Model -> FlyWire + MiroFish -> Multi-Brain Fusion -> AI Paper Trader -> Risk Governor -> delayed PAPER execution -> persistence/review.
 
-MiroFish, FlyWire and FOMO are experimental research components. They may be enabled in the PAPER configuration, but none is treated as validated alpha and none bypasses the Risk Governor.
+MiroFish, FlyWire, FOMO and Early Formation are experimental research components. None is treated as validated alpha and none bypasses the Risk Governor.
 
 ## Key capabilities
 - exact mint identity and conservative UNKNOWN semantics;
 - Smart Capital wallet/token position reconstruction;
 - wallet quality/style, conviction, accumulation and independent weighted consensus;
 - TRUE_SMART_CAPITAL_30D and Emerging Smart Wallet discovery;
-- historical/current Pump top-wallet snapshots;
-- probabilistic wallet clans/cohorts with shared-funder hub correction and community splitting;
+- point-in-time Pump top-wallet snapshots with stale-rank expiry;
+- wallet research priority for scarce Helius budget;
+- probabilistic wallet clans/cohorts with shared-funder hub correction, community splitting and separate alpha/risk scores;
 - Helius-only organic wallet qualification when no external Pump leaderboard provider is configured;
 - Launch Integrity / coordinated-dump / sellability research features;
-- local MiroFish-style future rollouts and real FlyWire/FAFB reservoir controls;
+- experimental Early Smart Capital Formation for earlier setup detection before excessive price extension;
+- local MiroFish-style future rollouts with PAPER/SHADOW caching and deterministic full-rollout BACKTEST/REPLAY behavior;
+- real FlyWire/FAFB reservoir controls with per-token recurrent state;
 - reliability-aware Multi-Brain Fusion;
 - delayed PAPER ENTER/ADD at T+60 with revalidation;
-- versioned Pump protocol fee simulation plus Solana network fee accounting;
+- Pump protocol fee tiers, Solana network fee accounting, slippage/impact, failures and partial fills;
 - persistent PAPER positions/pending signals/research state across restarts;
-- executable-runner labels, chronological training, walk-forward evaluation and ablations.
+- executable-runner labels with right-censor protection;
+- chronological training, label-availability purge, walk-forward evaluation and component ablations;
+- dashboard visibility for candidates, formation, Smart Capital, Pump discovery, clan alpha/risk, MiroFish/FlyWire and PAPER positions.
 
 ## Windows
 
@@ -53,7 +58,7 @@ Real on-chain SHADOW ingestion into the same PAPER engine:
 scripts\RUN_PARSED_SHADOW.bat
 ```
 
-Put HELIUS_API_KEY in local .env. Never commit .env. FOMOSCAN_API_KEY is optional for automatic Pump leaderboard/callout discovery.
+Put `HELIUS_API_KEY` in local `.env`. Never commit `.env`. `FOMOSCAN_API_KEY` is optional for automatic Pump leaderboard/callout discovery.
 
 ## Training / validation
 
@@ -64,12 +69,12 @@ python -m runner_genesis.cli walk-forward data/training/executable_runner.csv
 python -m runner_genesis.cli train-genesis data/training/executable_runner.csv --out artifacts/models/genesis_model.joblib
 ```
 
-Do not interpret an untrained research score as a calibrated probability.
+Do not interpret an untrained research score as a calibrated probability. Experimental modules are promoted only after chronological OOS/shadow/PAPER evidence.
 
 ## Tests
 
-GitHub Actions at checkpoint cf1cdc51e83922a057350bac65703fda6cb6572f:
-- 68 Python tests passed;
+Latest verified checkpoint: `be386666df00621902918aed9c818d5c5cd7897d`, GitHub Actions run 264:
+- 108 Python tests passed;
 - demo backtest smoke passed;
 - component ablation smoke passed;
 - frontend production build passed.
@@ -77,8 +82,8 @@ GitHub Actions at checkpoint cf1cdc51e83922a057350bac65703fda6cb6572f:
 ## Project memory
 
 For continuation from another ChatGPT/Work session, read:
-1. docs/MASTER_CONTEXT.md
-2. docs/CURRENT_STATE.md
-3. docs/NEXT_STEPS.md
+1. `docs/MASTER_CONTEXT.md`
+2. `docs/CURRENT_STATE.md`
+3. `docs/NEXT_STEPS.md`
 
 GitHub is the canonical persistent project memory.
