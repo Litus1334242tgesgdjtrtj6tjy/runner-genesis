@@ -82,9 +82,9 @@ class ActorGraphEngine:
     def _refresh_funder_sibling_edges(self, funder: str, ts: datetime) -> None:
         siblings = sorted(self.funder_to_wallets.get(funder, ()))
         if len(siblings) > self.max_funder_pair_expansion:
-            # High-degree funders are likely services/hubs and an O(n^2) clique would both
-            # waste memory and create misleading actor structure. Only clean previously
-            # expanded edges; concentration is still reported separately.
+            if funder in self.hub_funders:
+                return
+            self.hub_funders.add(funder)
             sibling_set = set(siblings)
             for a, b, data in list(self.graph.edges(data=True)):
                 if a not in sibling_set or b not in sibling_set:
@@ -95,7 +95,7 @@ class ActorGraphEngine:
                 common = self.wallet_to_funders.get(a, set()).intersection(self.wallet_to_funders.get(b, set()))
                 eligible = [
                     x for x in common
-                    if len(self.funder_to_wallets.get(x, ())) <= self.max_funder_pair_expansion
+                    if x != funder and len(self.funder_to_wallets.get(x, ())) <= self.max_funder_pair_expansion
                 ]
                 best = max((self._shared_funder_confidence(x) for x in eligible), default=0.0)
                 self._set_relation_confidence(a, b, "SHARES_FUNDER", best, ts)
