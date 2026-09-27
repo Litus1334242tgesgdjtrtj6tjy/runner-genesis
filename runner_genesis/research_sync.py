@@ -153,6 +153,111 @@ class ResearchSyncCoordinator:
             }
         return list(latest.values())
 
+    def _priority_independence(self, wallet: str, peers: list[str]) -> float:
+        actor = getattr(self.engine, "actor", None)
+        if actor is None or not hasattr(actor, "independence_factor"):
+            return 1.0
+        try:
+            return float(actor.independence_factor(wallet, peers))
+        except Exception:
+            return 1.0
+
+    def _priority_select(
+        self,
+        qualification_by_wallet: dict[str, dict[str, Any]],
+        *,
+        limit: int,
+        now: datetime,
+    ) -> list[dict[str, Any]]:
+        rows = [dict(x) for x in qualification_by_wallet.values()]
+        if limit <= 0 or not rows:
+            return []
+
+        if not bool(self.settings.external_discovery.wallet_priority_enabled):
+            ranked_rows = [x for x in rows if x.get("rank") is not None]
+            emerging_rows = [x for x in rows if x.get("rank") is None]
+            ranked_rows.sort(key=lambda x: (int(x.get("rank") or 10**9), -(float(x.get("monthly_pnl") or 0.0))))
+            emerging_rows.sort(
+                key=lambda x: (
+                    -(x.get("observed_at").timestamp() if isinstance(x.get("observed_at"), datetime) else 0.0),
+                    str(x.get("wallet_address") or ""),
+                )
+            )
+            top_fraction = max(0.0, min(1.0, float(self.settings.external_discovery.top_wallet_backfill_fraction)))
+            if ranked_rows and emerging_rows and limit > 1:
+                top_slots = max(1, min(limit - 1, int(round(limit * top_fraction))))
+                selected = ranked_rows[:top_slots] + emerging_rows[: limit - top_slots]
+            else:
+                selected = (ranked_rows + emerging_rows)[:limit]
+            return selected[:limit]
+
+        # Stage 1 is deliberately cheap and keeps the expensive 7d/30d wallet analytics
+        # bounded even if the live registry grows into the thousands.
+        prelim = []
+        for row in rows:
+            wallet = str(row.get("wallet_address") or "").strip()
+            if not wallet:
+                continue
+            context = self.engine.discovery.wallet_context(wallet, now)
+            scored = self.wallet_priority.score(
+                row,
+                smart_metrics=None,
+                discovery_context=context,
+                independence_score=1.0,
+                now=now,
+            )
+            row.update(scored)
+            prelim.append(row)
+        prelim.sort(key=lambda x: float(x.get("wallet_discovery_priority_score") or 0.0), reverse=True)
+
+        pool_size = max(
+            limit,
+            min(
+                len(prelim),
+                max(limit, int(self.settings.external_discovery.wallet_priority_candidate_pool)),
+            ),
+        )
+        pool = prelim[:pool_size]
+        peer_wallets = [str(x.get("wallet_address") or "") for x in pool if x.get("wallet_address")]
+
+        fully_scored = []
+        store = getattr(self.engine, "store", None)
+        smart_engine = getattr(self.engine, "smart", None)
+        for row in pool:
+            wallet = str(row.get("wallet_address") or "").strip()
+            context = self.engine.discovery.wallet_context(wallet, now)
+            smart_metrics = {}
+            if store is not None and smart_engine is not None:
+                try:
+                    smart_metrics = smart_engine.emerging_wallet_metrics(wallet, now, store)
+                except Exception:
+                    smart_metrics = {}
+            independence = self._priority_independence(wallet, peer_wallets)
+            scored = self.wallet_priority.score(
+                row,
+                smart_metrics=smart_metrics,
+                discovery_context=context,
+                independence_score=independence,
+                now=now,
+            )
+            row.update(scored)
+            row["priority_smart_metrics"] = {
+                "smart_capital_30d_score": smart_metrics.get("smart_capital_30d_score"),
+                "emerging_smart_wallet_score": smart_metrics.get("emerging_smart_wallet_score"),
+                "data_quality_score": smart_metrics.get("data_quality_score"),
+                "sample_size_30d": smart_metrics.get("sample_size_30d"),
+            }
+            fully_scored.append(row)
+
+        fully_scored.sort(
+            key=lambda x: (
+                float(x.get("wallet_discovery_priority_score") or 0.0),
+                -(int(x.get("rank") or 10**9)),
+            ),
+            reverse=True,
+        )
+        return fully_scored[:limit]
+
     async def sync_once(self, max_wallets: int | None = None) -> dict[str, Any]:
         if not self.enabled:
             result = {
