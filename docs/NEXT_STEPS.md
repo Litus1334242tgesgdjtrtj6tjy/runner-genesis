@@ -1,14 +1,17 @@
 # Next Steps / Handoff
 
-Read `MASTER_CONTEXT.md`, `CURRENT_STATE.md`, and this file first.
+Read MASTER_CONTEXT.md and CURRENT_STATE.md first.
 
-1. Verify branch `work/v0.2-smart-capital-world-model` and latest commit.
-2. Run `python -m pytest -q`; expected current result is 17 passing tests.
-3. Add a **real, point-in-time historical data/backfill adapter** for wallet transactions and resolved outcomes. Do not invent wallet PnL from incomplete current observations.
-4. Add a configurable Pump leaderboard provider/scheduler only after verifying the current official/public source and its terms/shape. Store every observed snapshot with timestamp; never overwrite history.
-5. Build executable-runner labels from historical price/liquidity + simulated execution costs and sellability.
-6. Train/calibrate Genesis and future-state models chronologically and use expanding walk-forward evaluation.
-7. Add benchmark/ablation runner for copytrade, top-PnL, unweighted consensus, weighted consensus, +accumulation, +entry distance, +independence, +Launch Integrity, +Market Acceleration, +Persistence, +FOMO, +World Model, +MiroFish, full system.
-8. Only after evidence improves OOS executable metrics should any experimental brain be promoted.
+The implementation bottleneck is now DATA / VALIDATION rather than missing core architecture.
 
-Never enable live trading while continuing these steps.
+1. Configure a real HELIUS_API_KEY locally in .env and run PAPER/SHADOW long enough to build point-in-time wallet outcomes, funding cohorts and executable token histories.
+2. Optionally configure FOMOSCAN_API_KEY locally to enable automatic Pump top-trader/callout discovery. If no key is present, the system degrades safely and keeps on-chain core operation.
+3. Inspect /api/research/status, /api/smart-capital/wallets and /api/discovery/cohorts to confirm real data is populating.
+4. Build historical EXECUTABLE_RUNNER labels using only information available at decision time plus post-decision labels, with realistic fees/slippage/impact/sellability.
+5. Train/calibrate Genesis and future-state models chronologically; keep P_X2/P_X5/etc N/A until this is done.
+6. Run expanding/rolling walk-forward evaluation and component ablations. Promote MiroFish/FlyWire/FOMO only if they improve OOS calibration, false positives, lead time and executable net performance.
+7. Add larger 500–1000 wallet operational load tests after real provider rate limits are observed.
+8. Keep LIVE_TRADING=false.
+
+Continuation command for another ChatGPT conversation:
+"Continue RUNNER GENESIS Ω from branch work/v0.2-smart-capital-world-model. Read docs/MASTER_CONTEXT.md, docs/CURRENT_STATE.md and docs/NEXT_STEPS.md, inspect the latest GitHub Actions run, and continue without enabling live trading."
