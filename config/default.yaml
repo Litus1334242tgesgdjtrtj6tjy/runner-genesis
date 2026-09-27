@@ -108,6 +108,9 @@ execution:
   max_liquidity_fraction: 0.02
   failed_tx_base_probability: 0.015
   partial_fill_enabled: true
+  network_base_fee_lamports: 5000
+  network_priority_fee_lamports: 0
+  network_signature_count: 1
 
 trader:
   min_genesis_to_watch: 0.55
