@@ -281,28 +281,59 @@ class ResearchSyncCoordinator:
 
             semaphore = asyncio.Semaphore(max(1, int(self.settings.helius_history.max_concurrency)))
 
-            async def run_one(wallet: str):
+            async def fetch_one(wallet: str):
                 async with semaphore:
                     try:
-                        result = await service.backfill_wallet(
+                        bundle = await service.fetch_wallet_bundle(
                             wallet,
-                            self.engine.store,
-                            self.engine.actor,
                             limit=self.settings.helius_history.page_limit,
                             max_pages=self.settings.helius_history.max_pages,
                         )
-                        self._seen_wallets.add(wallet)
-                        self._last_backfill[wallet] = now
-                        return asdict(result)
+                        return wallet, bundle, None
                     except Exception as exc:
-                        return {
+                        return wallet, None, {
                             "wallet": wallet,
                             "error": type(exc).__name__,
                             "message": str(exc)[:200],
                         }
 
             if due_wallets:
-                backfills = list(await asyncio.gather(*(run_one(w) for w in due_wallets)))
+                fetched = list(await asyncio.gather(*(fetch_one(w) for w in due_wallets)))
+                bundles = [bundle for _, bundle, error in fetched if bundle is not None and error is None]
+
+                # Mutate the shared Actor Graph in one globally chronological pass. Network
+                # fetches remain concurrent, but wallet request completion order cannot
+                # create false co-buy sequence structure.
+                actor_events = sorted(
+                    (event for bundle in bundles for event in bundle.events),
+                    key=lambda event: (event.timestamp, event.event_id),
+                )
+                for event in actor_events:
+                    self.engine.actor.observe(event)
+
+                funding_links = sorted(
+                    (link for bundle in bundles for link in bundle.funding_links),
+                    key=lambda link: (link.timestamp, link.wallet, link.funder),
+                )
+                for link in funding_links:
+                    self.engine.actor.observe_funding_link(
+                        link.wallet, link.funder, link.timestamp, link.confidence
+                    )
+
+                for wallet, bundle, error in fetched:
+                    if error is not None:
+                        backfills.append(error)
+                        continue
+                    result = service.apply_bundle(
+                        bundle,
+                        self.engine.store,
+                        self.engine.actor,
+                        apply_actor_events=False,
+                        apply_funding=False,
+                    )
+                    backfills.append(asdict(result))
+                    self._seen_wallets.add(wallet)
+                    self._last_backfill[wallet] = now
 
         self._last_sync = datetime.now(timezone.utc)
         status = "OK" if qualification_by_wallet else "WAITING_DISCOVERY_SOURCE"
