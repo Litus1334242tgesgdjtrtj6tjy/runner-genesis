@@ -221,30 +221,55 @@ class ResearchSyncCoordinator:
                     default=observed_at,
                 )
 
-        limit = int(max_wallets or self.settings.external_discovery.max_wallets_per_refresh)
-        def _row_priority(row: dict[str, Any]):
-            rank = row.get("rank")
-            ranked_flag = 0 if rank is not None else 1
-            rank_value = int(rank) if rank is not None else 10**9
-            pnl_value = -(float(row.get("monthly_pnl") or 0.0))
-            observed = row.get("observed_at")
-            if isinstance(observed, datetime):
-                observed_ts = observed.timestamp()
-            else:
-                observed_ts = 0.0
-            return (ranked_flag, rank_value, pnl_value, -observed_ts)
+        limit = max(0, int(max_wallets or self.settings.external_discovery.max_wallets_per_refresh))
 
-        ranked = sorted(rows, key=_row_priority)[: max(0, limit)]
+        # Qualification is broader than the external leaderboard: keep top-ranked wallets
+        # while reserving part of the Helius budget for newly observed on-chain wallets
+        # that may become EMERGING_SMART_WALLET candidates.
+        qualification_by_wallet: dict[str, dict[str, Any]] = {}
+        for row in self._seed_rows_from_registry():
+            wallet = str(row.get("wallet_address") or "").strip()
+            if wallet:
+                qualification_by_wallet[wallet] = dict(row)
+        for row in rows:
+            wallet = str(row.get("wallet_address") or "").strip()
+            if wallet:
+                merged = dict(qualification_by_wallet.get(wallet) or {})
+                merged.update(row)
+                merged["discovery_kind"] = "TOP_LEADERBOARD" if row.get("rank") is not None else merged.get("discovery_kind")
+                qualification_by_wallet[wallet] = merged
+
+        ranked_rows = [x for x in qualification_by_wallet.values() if x.get("rank") is not None]
+        emerging_rows = [x for x in qualification_by_wallet.values() if x.get("rank") is None]
+        ranked_rows.sort(key=lambda x: (int(x.get("rank") or 10**9), -(float(x.get("monthly_pnl") or 0.0))))
+        emerging_rows.sort(
+            key=lambda x: (
+                -(x.get("observed_at").timestamp() if isinstance(x.get("observed_at"), datetime) else 0.0),
+                str(x.get("wallet_address") or ""),
+            )
+        )
+
+        top_fraction = max(0.0, min(1.0, float(self.settings.external_discovery.top_wallet_backfill_fraction)))
+        if ranked_rows and emerging_rows and limit > 1:
+            top_slots = max(1, min(limit - 1, int(round(limit * top_fraction))))
+            emerging_slots = limit - top_slots
+            selected = ranked_rows[:top_slots] + emerging_rows[:emerging_slots]
+            if len(selected) < limit:
+                used = {str(x.get("wallet_address") or "") for x in selected}
+                leftovers = [x for x in ranked_rows[top_slots:] + emerging_rows[emerging_slots:] if str(x.get("wallet_address") or "") not in used]
+                selected.extend(leftovers[: limit - len(selected)])
+        else:
+            selected = (ranked_rows + emerging_rows)[:limit]
 
         backfills = []
         skipped_recent = 0
-        if self.settings.helius_history.enabled and self.settings.helius_api_key and ranked:
+        if self.settings.helius_history.enabled and self.settings.helius_api_key and selected:
             client = HeliusWalletHistoryClient(self.settings.helius_api_key)
             service = WalletResearchBackfillService(client, repository=self.engine.repository)
             now = datetime.now(timezone.utc)
             min_age = max(60.0, float(self.settings.helius_history.refresh_seconds))
             due_wallets = []
-            for row in ranked:
+            for row in selected:
                 wallet = str(row.get("wallet_address") or "").strip()
                 if not wallet:
                     continue
