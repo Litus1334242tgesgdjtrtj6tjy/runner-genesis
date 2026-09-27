@@ -93,7 +93,7 @@ class RunnerGenesisOmega:
         self.smart = SmartCapitalEngine(settings.smart_capital, self.wallet_quality, self.discovery)
         self.launch_integrity = LaunchIntegrityEngine()
         self.fomo = FomoEngine(settings.fomo)
-        self.mirofish = MiroFishRolloutEngine(settings.mirofish)
+        self.mirofish = MiroFishRolloutEngine(settings.mirofish, deterministic=settings.mode.upper() in {'BACKTEST','REPLAY'})
         self.cohorts = CohortDiscoveryEngine()
         self.fusion = MultiBrainStateFusionEngine()
         self.exec_alpha = ExecutableAlphaModel()
