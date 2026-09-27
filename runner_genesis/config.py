@@ -110,6 +110,7 @@ class HeliusHistoryConfig(BaseModel):
     max_pages: int = 5
     min_funding_sol: float = 0.01
     refresh_seconds: float = 21600.0
+    max_concurrency: int = 4
 
 
 class ExternalDiscoveryConfig(BaseModel):
