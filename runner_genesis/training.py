@@ -11,6 +11,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
@@ -234,9 +235,13 @@ def build_executable_dataset(
     )
     engine = create_engine(database_url, future=True)
     by_token: dict[str, list[dict[str, Any]]] = {}
-    with engine.connect() as conn:
-        events = conn.execute(select(EventRow).order_by(EventRow.timestamp.asc(), EventRow.id.asc())).scalars().all()
-        decisions = conn.execute(select(DecisionRow).order_by(DecisionRow.timestamp.asc(), DecisionRow.id.asc())).scalars().all()
+    with Session(engine) as session:
+        events = session.execute(
+            select(EventRow).order_by(EventRow.timestamp.asc(), EventRow.id.asc())
+        ).scalars().all()
+        decisions = session.execute(
+            select(DecisionRow).order_by(DecisionRow.timestamp.asc(), DecisionRow.id.asc())
+        ).scalars().all()
 
     for row in events:
         obs = _event_observation(row)
