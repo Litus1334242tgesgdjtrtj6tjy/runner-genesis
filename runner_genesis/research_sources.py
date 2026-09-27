@@ -58,6 +58,8 @@ class WalletResearchBackfillService:
         for tx in txs:
             events.extend(self.normalizer.normalize_swap(wallet, tx))
             funding.extend(self.normalizer.funding_links(wallet, tx))
+        for event in sorted(events, key=lambda x: x.timestamp):
+            actor.observe(event)
         for link in sorted(funding, key=lambda x: x.timestamp):
             actor.observe_funding_link(link.wallet, link.funder, link.timestamp, link.confidence)
         resolved = self.outcomes.build(events)
