@@ -11,10 +11,19 @@ class PortfolioLedger:
     def apply_fill(self, fill: PaperFill):
         self.fills.append(fill)
         self.account.advance_accounting_day(fill.timestamp)
-        if fill.failed or fill.filled_eur <= 0:
+        a = self.account
+        if fill.failed:
+            network_cost = max(0.0, float(fill.fees_eur or 0.0))
+            if network_cost > 0:
+                charged = min(network_cost, max(0.0, a.cash_eur))
+                a.cash_eur -= charged
+                a.realized_pnl_eur -= charged
+                a.daily_realized_pnl_eur -= charged
+                a.daily_spend_eur += charged
+            return
+        if fill.filled_eur <= 0:
             return
 
-        a = self.account
         if fill.side == 'BUY':
             total_cost = fill.filled_eur + fill.fees_eur
             if total_cost > a.cash_eur + 1e-9:
