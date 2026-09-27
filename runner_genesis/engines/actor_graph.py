@@ -114,7 +114,21 @@ class ActorGraphEngine:
             best = max((self._shared_funder_confidence(x) for x in eligible), default=0.0)
             self._set_relation_confidence(a, b, "SHARES_FUNDER", best or confidence, ts)
 
+    def _accept_event_once(self, event_id: str | None) -> bool:
+        if not event_id:
+            return True
+        if event_id in self._seen_event_ids:
+            return False
+        self._seen_event_ids.add(event_id)
+        self._seen_event_order.append(event_id)
+        if len(self._seen_event_order) > self.max_seen_events:
+            expired = self._seen_event_order.popleft()
+            self._seen_event_ids.discard(expired)
+        return True
+
     def observe(self, e: MarketEvent) -> None:
+        if not self._accept_event_once(e.event_id):
+            return
         if e.wallet:
             self.graph.add_node(e.wallet, kind="wallet")
         if e.event_type == EventType.WALLET_FUNDED and e.wallet and e.counterparty:
