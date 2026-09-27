@@ -67,8 +67,8 @@ class WalletDiscoveryPriorityEngine:
         smart_metrics: dict[str, Any] | None,
         discovery_context: dict[str, Any] | None,
         independence_score: float,
-        cohort_quality: float = 0.0,
         now: datetime,
+        cohort_quality: float = 0.0,
     ) -> dict[str, Any]:
         smart = smart_metrics or {}
         discovery = discovery_context or {}
