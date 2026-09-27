@@ -39,6 +39,19 @@ class PortfolioLedger:
             p.quantity = new_qty
             p.cost_basis_eur += total_cost
             p.last_updated_at = fill.timestamp
+            fill_cluster = getattr(fill, 'risk_cluster_id', None)
+            if fill_cluster:
+                if p.risk_cluster_id is None or p.risk_cluster_id == fill_cluster:
+                    p.risk_cluster_id = str(fill_cluster)
+                    p.risk_cluster_fraction = max(
+                        float(p.risk_cluster_fraction or 0.0),
+                        float(getattr(fill, 'risk_cluster_fraction', 0.0) or 0.0),
+                    )
+                else:
+                    # Multiple unrelated actor cohorts accumulated into the same position:
+                    # mark it mixed rather than assigning all exposure to either clan.
+                    p.risk_cluster_id = 'MIXED'
+                    p.risk_cluster_fraction = 0.0
             if old_value > 0:
                 p.adds += 1
             a.cash_eur -= total_cost
