@@ -1,11 +1,15 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+import asyncio
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from ..config import load_settings
 from ..orchestrator import RunnerGenesisOmega
 from ..domain.events import MarketEvent
 from ..ingestion.helius import HeliusWebhookNormalizer
+from ..ingestion.helius_history import HeliusWalletHistoryClient
+from ..research_sources import WalletResearchBackfillService
+from ..research_sync import ResearchSyncCoordinator
 
 settings = load_settings()
 engine = RunnerGenesisOmega(settings)
@@ -17,6 +21,29 @@ app.add_middleware(
     allow_headers=['*'],
 )
 normalizer = HeliusWebhookNormalizer()
+research_sync = ResearchSyncCoordinator(settings, engine)
+_research_stop = asyncio.Event()
+_research_task: asyncio.Task | None = None
+
+
+@app.on_event('startup')
+async def _start_research_sync():
+    global _research_task
+    if settings.external_discovery.auto_refresh and research_sync.enabled:
+        _research_stop.clear()
+        _research_task = asyncio.create_task(research_sync.run_loop(_research_stop))
+
+
+@app.on_event('shutdown')
+async def _stop_research_sync():
+    global _research_task
+    _research_stop.set()
+    if _research_task is not None:
+        try:
+            await asyncio.wait_for(_research_task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            _research_task.cancel()
+        _research_task = None
 
 
 @app.get('/health')
@@ -32,6 +59,7 @@ def health():
         'mirofish_enabled': settings.mirofish.enabled,
         'fomo_enabled': settings.fomo.enabled,
         'pending_paper_orders': len(engine.pending_orders),
+        'research_sync': research_sync.status(),
     }
 
 
@@ -234,3 +262,45 @@ def state_transitions(limit: int = 200):
 @app.get('/api/alerts')
 def alerts(limit: int = 200):
     return engine.alerts.recent(max(1, min(limit, 1000)))
+
+
+@app.get('/api/research/status')
+def research_status():
+    return research_sync.status()
+
+
+@app.post('/api/research/sync')
+async def research_sync_once(max_wallets: int | None = None):
+    return await research_sync.sync_once(max_wallets=max_wallets)
+
+
+@app.post('/api/research/backfill/wallet/{wallet}')
+async def research_backfill_wallet(wallet: str, max_pages: int | None = None):
+    if not settings.helius_history.enabled:
+        raise HTTPException(409, 'helius history backfill disabled')
+    if not settings.helius_api_key:
+        raise HTTPException(503, 'HELIUS_API_KEY not configured')
+    client = HeliusWalletHistoryClient(settings.helius_api_key)
+    service = WalletResearchBackfillService(client)
+    result = await service.backfill_wallet(
+        wallet,
+        engine.store,
+        engine.actor,
+        limit=settings.helius_history.page_limit,
+        max_pages=max_pages or settings.helius_history.max_pages,
+    )
+    return result.__dict__
+
+
+@app.get('/api/discovery/cohorts')
+def discovery_cohorts(limit: int = 100, min_size: int = 2):
+    now = max((t.last_event_at for t in engine.store.tokens.values() if t.last_event_at), default=datetime.now(timezone.utc))
+    wallets = sorted(set(engine.store.wallets) | set(engine.discovery.wallet_sources))
+    metrics = {w: engine.smart.wallet_metrics(w, now, engine.store) for w in wallets}
+    return engine.cohorts.discover(
+        engine.actor,
+        metrics,
+        now,
+        min_size=max(2, min(int(min_size), 50)),
+        limit=max(1, min(int(limit), 1000)),
+    )
