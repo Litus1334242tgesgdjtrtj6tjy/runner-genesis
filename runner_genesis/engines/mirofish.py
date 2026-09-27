@@ -62,7 +62,7 @@ class MiroFishRolloutEngine:
             return None
         previous_time, previous_signature, previous_result = cached
         dt = (decision_time - previous_time).total_seconds()
-        if dt < 0 or dt > max(0.0, float(self.cfg.min_rerun_seconds)):
+        if dt <= 0 or dt > max(0.0, float(self.cfg.min_rerun_seconds)):
             return None
         change = max((abs(a - b) for a, b in zip(signature, previous_signature)), default=0.0)
         if change > max(0.0, float(self.cfg.material_change_threshold)):
