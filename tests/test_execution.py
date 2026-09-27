@@ -110,3 +110,30 @@ def test_portfolio_rejects_unaffordable_fill_without_recording_it():
     assert ledger.fills == []
     assert ledger.account.cash_eur == 10.0
     assert 'M' not in ledger.account.positions
+
+
+
+def test_paper_position_keeps_wallet_cluster_exposure_metadata():
+    ledger = PortfolioLedger(300.0)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fill = PaperFill(
+        token_mint="M",
+        side="BUY",
+        requested_eur=10.0,
+        filled_eur=10.0,
+        quantity=10.0,
+        reference_price=1.0,
+        execution_price=1.0,
+        slippage_pct=0.0,
+        fees_eur=0.0,
+        latency_ms=0.0,
+        failed=False,
+        partial=False,
+        timestamp=now,
+        risk_cluster_id="actor-cluster:abc",
+        risk_cluster_fraction=0.75,
+    )
+    assert ledger.apply_fill(fill)
+    position = ledger.account.positions["M"]
+    assert position.risk_cluster_id == "actor-cluster:abc"
+    assert position.risk_cluster_fraction == 0.75
