@@ -347,6 +347,29 @@ class RuntimeRepository:
             except IntegrityError:
                 s.rollback()
 
+    def load_leaderboard_snapshots(self, limit: int = 100_000) -> list[dict]:
+        with self.Session() as s:
+            rows = s.execute(
+                select(LeaderboardSnapshotRow)
+                .order_by(LeaderboardSnapshotRow.observed_at.asc(), LeaderboardSnapshotRow.id.asc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            out = []
+            for r in rows:
+                payload = json.loads(r.payload_json) if r.payload_json else {}
+                out.append({
+                    'wallet_address': r.wallet_address,
+                    'source': r.source,
+                    'observed_at': r.observed_at,
+                    'rank': r.rank,
+                    'monthly_pnl': r.monthly_pnl,
+                    'username': payload.get('username'),
+                    'source_window': payload.get('source_window') or '1M',
+                    'source_confidence': payload.get('source_confidence', 1.0),
+                    'mapping_confidence': payload.get('mapping_confidence', 1.0),
+                })
+            return out
+
     def record_discovery(self, payload: dict) -> None:
         with self.Session() as s:
             s.add(DiscoveryObservationRow(
