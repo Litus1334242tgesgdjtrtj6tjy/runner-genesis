@@ -25,13 +25,27 @@ class ExecutableAlphaModel:
             gross = (p2f * 0.55 + p5f * 1.2 + p10f * 2.0) - (1 - max(p2f, p5f, p10f)) * 0.28
             status = 'MODEL_BASED'
         else:
-            # Research-only proxy used for ranking/watch state, not a calibrated return forecast.
+            # Research-only proxy used for PAPER ranking/experimentation. It is not a
+            # calibrated return forecast. Prefer the reliability-aware fusion score when
+            # available so Smart Capital / World / MiroFish / FlyWire context is not
+            # double-counted independently here.
             genesis = float(probs.get('genesis_score') or 0.0)
+            fusion = float(f.get('fusion_research_score', genesis) or 0.0)
+            fusion_conf = float(f.get('fusion_confidence', 0.0) or 0.0)
             persistence = float(f.get('runner_persistence') or 0.0)
             launch = float(f.get('launch_integrity_score') or 0.0)
             distribution = float(f.get('smart_distribution_score') or 0.0)
-            gross = 0.18 * genesis + 0.12 * persistence + 0.08 * launch - 0.18 * distribution - 0.08
-            status = 'HEURISTIC_UNTRAINED'
+            dump = float(f.get('coordinated_dump_risk') or 0.0)
+            gross = (
+                0.22 * fusion
+                + 0.10 * persistence
+                + 0.06 * launch
+                + 0.04 * fusion_conf
+                - 0.18 * distribution
+                - 0.12 * dump
+                - 0.08
+            )
+            status = 'FUSION_HEURISTIC_UNTRAINED' if 'fusion_research_score' in f else 'HEURISTIC_UNTRAINED'
         edge = gross - costs
         return {
             'executable_alpha_status': status,
