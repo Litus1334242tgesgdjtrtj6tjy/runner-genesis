@@ -139,6 +139,22 @@ class RunnerGenesisOmega:
                 float(row.get('confidence') or 0.0),
             )
 
+        for row in self.repository.load_leaderboard_snapshots(limit=limit):
+            observed_at = self._aware(row['observed_at'])
+            self.discovery.ingest_leaderboard(
+                [{
+                    'wallet_address': row['wallet_address'],
+                    'username': row.get('username'),
+                    'rank': row.get('rank'),
+                    'monthly_pnl': row.get('monthly_pnl'),
+                    'source_window': row.get('source_window') or '1M',
+                    'source_confidence': row.get('source_confidence', 1.0),
+                    'mapping_confidence': row.get('mapping_confidence', 1.0),
+                }],
+                observed_at=observed_at,
+                source=str(row.get('source') or 'PUMP_OFFICIAL'),
+            )
+
     def _fly_embedding(self, f: dict) -> np.ndarray:
         keys = [
             'capital_surprise', 'wallet_quality', 'pre_funding_score', 'cluster_density',
