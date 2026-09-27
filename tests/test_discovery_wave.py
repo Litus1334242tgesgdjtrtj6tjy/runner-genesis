@@ -83,3 +83,38 @@ def test_old_pump_snapshot_expires_from_context():
     assert fresh["pump_top_trader_present"] == 1.0
     assert old["pump_top_trader_present"] == 0.0
     assert old["pump_rank"] is None
+
+
+
+def test_old_top_wallet_buy_expires_from_token_wave_breadth():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    discovery = PumpDiscoveryEngine(
+        PumpDiscoveryConfig(
+            max_snapshot_age_seconds=3600,
+            participant_window_seconds=300,
+        )
+    )
+    discovery.ingest_leaderboard(
+        [{"wallet_address": "TOP", "rank": 1, "monthly_pnl": 1000}],
+        observed_at=t0,
+        source="PUMPFUN_TOP_TRADER",
+    )
+    actor = ActorGraphEngine()
+    old_buy = MarketEvent(
+        event_id="old",
+        timestamp=t0 + timedelta(seconds=10),
+        token_mint="MINT",
+        wallet="TOP",
+        event_type=EventType.BUY,
+        usd_value=100,
+    )
+    now = t0 + timedelta(minutes=10)
+    features = discovery.token_wave_features(
+        ["TOP"],
+        now,
+        actor=actor,
+        events=[old_buy],
+    )
+    assert features["top_trader_present"] == 0.0
+    assert features["top_trader_count"] == 0.0
+    assert features["top_trader_wave_score"] == 0.0
