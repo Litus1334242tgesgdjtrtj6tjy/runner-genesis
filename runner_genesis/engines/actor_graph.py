@@ -1,5 +1,5 @@
 from __future__ import annotations
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from itertools import combinations
 import math
@@ -25,7 +25,7 @@ class ActorGraphEngine:
     fake "clan".
     """
 
-    def __init__(self, coevent_window_seconds: int = 120, max_funder_pair_expansion: int = 64) -> None:
+    def __init__(self, coevent_window_seconds: int = 120, max_funder_pair_expansion: int = 64, max_seen_events: int = 500_000) -> None:
         self.graph = nx.Graph()
         self.recent_by_token: dict[str, list[MarketEvent]] = defaultdict(list)
         self.funder_to_wallets: dict[str, set[str]] = defaultdict(set)
@@ -33,6 +33,9 @@ class ActorGraphEngine:
         self.hub_funders: set[str] = set()
         self.coevent_window = timedelta(seconds=coevent_window_seconds)
         self.max_funder_pair_expansion = max(8, int(max_funder_pair_expansion))
+        self.max_seen_events = max(10_000, int(max_seen_events))
+        self._seen_event_ids: set[str] = set()
+        self._seen_event_order: deque[str] = deque()
 
     @staticmethod
     def _combine(confs) -> float:
