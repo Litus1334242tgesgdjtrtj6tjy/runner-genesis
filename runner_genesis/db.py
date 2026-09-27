@@ -55,6 +55,17 @@ class WalletMetricRow(Base):
     payload_json: Mapped[str] = mapped_column(Text)
 
 
+class WalletBackfillStatusRow(Base):
+    __tablename__ = 'wallet_backfill_status'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wallet_address: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    last_success_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    transactions: Mapped[int] = mapped_column(Integer, default=0)
+    swap_events: Mapped[int] = mapped_column(Integer, default=0)
+    resolved_outcomes: Mapped[int] = mapped_column(Integer, default=0)
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
 class WalletOutcomeRow(Base):
     __tablename__ = 'wallet_outcomes'
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -276,6 +287,57 @@ class RuntimeRepository:
                     'timestamp': r.timestamp,
                 })
                 out.append(payload)
+            return out
+
+    def record_wallet_backfill_status(self, wallet: str, last_success_at: datetime, payload: dict | None = None) -> None:
+        payload = dict(payload or {})
+        with self.Session() as s:
+            row = s.execute(
+                select(WalletBackfillStatusRow)
+                .where(WalletBackfillStatusRow.wallet_address == str(wallet))
+            ).scalar_one_or_none()
+            values = {
+                'transactions': int(payload.get('transactions') or 0),
+                'swap_events': int(payload.get('swap_events') or 0),
+                'resolved_outcomes': int(payload.get('resolved_outcomes') or 0),
+                'payload_json': _json(payload),
+            }
+            if row is None:
+                row = WalletBackfillStatusRow(
+                    wallet_address=str(wallet),
+                    last_success_at=last_success_at,
+                    **values,
+                )
+                s.add(row)
+            else:
+                row.last_success_at = last_success_at
+                row.transactions = values['transactions']
+                row.swap_events = values['swap_events']
+                row.resolved_outcomes = values['resolved_outcomes']
+                row.payload_json = values['payload_json']
+            s.commit()
+
+    def load_wallet_backfill_status(self, limit: int = 100_000) -> list[dict]:
+        with self.Session() as s:
+            rows = s.execute(
+                select(WalletBackfillStatusRow)
+                .order_by(WalletBackfillStatusRow.last_success_at.desc(), WalletBackfillStatusRow.id.desc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            out = []
+            for r in rows:
+                try:
+                    payload = json.loads(r.payload_json) if r.payload_json else {}
+                except Exception:
+                    payload = {}
+                out.append({
+                    'wallet_address': r.wallet_address,
+                    'last_success_at': r.last_success_at,
+                    'transactions': r.transactions,
+                    'swap_events': r.swap_events,
+                    'resolved_outcomes': r.resolved_outcomes,
+                    'payload': payload,
+                })
             return out
 
     def record_wallet_metrics(self, wallet: str, observed_at: datetime, payload: dict) -> None:
