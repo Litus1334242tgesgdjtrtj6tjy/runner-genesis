@@ -109,6 +109,59 @@ class SmartCapitalEngine:
             self.positions[key] = WalletTokenPosition(wallet_address=wallet, token_mint=mint)
         return self.positions[key]
 
+    @staticmethod
+    def _parse_dt(value):
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str) and value:
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
+
+    def restore_position_snapshot(self, wallet: str, mint: str, payload: dict[str, Any]) -> WalletTokenPosition:
+        """Restore one persisted wallet-token state without replaying it as a new trade."""
+        p = WalletTokenPosition(wallet_address=wallet, token_mint=mint)
+        for name in (
+            "average_entry_price", "average_entry_market_cap", "bought_token", "sold_token",
+            "bought_usd", "sold_usd", "invested_sol", "estimated_liquid_capital_usd",
+        ):
+            value = payload.get(name)
+            if value is not None:
+                try:
+                    setattr(p, name, float(value))
+                except (TypeError, ValueError):
+                    pass
+        for name in ("buy_count", "sell_count"):
+            value = payload.get(name)
+            if value is not None:
+                try:
+                    setattr(p, name, int(value))
+                except (TypeError, ValueError):
+                    pass
+        for name in ("first_entry_time", "last_entry_time", "last_activity_time"):
+            setattr(p, name, self._parse_dt(payload.get(name)))
+        p.state = str(payload.get("state") or "UNKNOWN")
+        p.buy_sizes_usd = [
+            float(x) for x in (payload.get("buy_sizes_usd") or [])
+            if isinstance(x, (int, float)) and float(x) >= 0
+        ]
+        p.event_ids = [str(x) for x in (payload.get("event_ids") or []) if x is not None]
+        self.positions[(wallet, mint)] = p
+
+        if p.last_activity_time is not None:
+            self.wallet_trade_times[wallet].append(p.last_activity_time)
+        if p.state == "EXIT" and p.first_entry_time and p.last_activity_time:
+            hold = max(0.0, (p.last_activity_time - p.first_entry_time).total_seconds())
+            if hold > 0:
+                self.wallet_closed_holds[wallet].append(hold)
+        return p
+
+    def restore_token_state(self, mint: str, state: str | None) -> None:
+        if state:
+            self.token_state[mint] = str(state)
+
     def observe(self, e: MarketEvent) -> None:
         if not self.cfg.enabled or not e.wallet or e.event_type not in BUY_TYPES | SELL_TYPES:
             return
