@@ -68,3 +68,36 @@ def test_weighted_consensus_and_entry_distance_point_in_time():
     assert 0.95 <= f['entry_distance_price'] <= 1.05
     assert f['signal_validity'] == 'VALID'
     assert f['entry_validity'] == 'VALID'
+
+
+def test_true_smart_capital_30d_uses_only_resolved_window_for_window_stats():
+    now = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    store = MarketStateStore(); q = WalletQualityEngine()
+    smart = SmartCapitalEngine(SmartCapitalConfig(), q, PumpDiscoveryEngine(PumpDiscoveryConfig()))
+    wallet = 'WINDOW'
+    observations = [
+        WalletBuyObservation(
+            event_time=now-timedelta(days=70), resolved_at=now-timedelta(days=60),
+            token_mint='OLD', buy_eur=100, realized_return=10.0,
+            runner_capture_ratio=0.9, hold_seconds=7200,
+        ),
+    ]
+    for i in range(6):
+        observations.append(WalletBuyObservation(
+            event_time=now-timedelta(days=10-i), resolved_at=now-timedelta(days=6-i),
+            token_mint=f'NEW{i}', buy_eur=100, realized_return=0.25 + 0.05*i,
+            runner_capture_ratio=0.4, hold_seconds=3600,
+        ))
+    for obs in sorted(observations, key=lambda x: x.resolved_at):
+        store.resolve_wallet_observation(wallet, obs)
+
+    row = smart.wallet_metrics_window(wallet, now, store, 30)
+    assert row['sample_size'] == 6
+    assert row['tokens_10x'] == 0
+    assert row['window_days'] == 30
+    assert row['net_pnl'] is not None
+    assert 0 <= row['smart_capital_30d_score'] <= 1
+
+    emerg = smart.emerging_wallet_metrics(wallet, now, store)
+    assert emerg['recent_sample_size_7d'] == 6
+    assert 0 <= emerg['emerging_smart_wallet_score'] <= 1
