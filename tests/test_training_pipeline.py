@@ -10,6 +10,7 @@ from runner_genesis.training import (
     TARGETS,
     _future_labels,
     train_genesis_from_dataset,
+    walk_forward_evaluate,
 )
 
 
@@ -71,3 +72,7 @@ def test_chronological_training_writes_loadable_calibrated_artifact(tmp_path):
     out = model.predict(features)
     assert out["genesis_prob"] is not None
     assert 0.0 <= out["genesis_prob"] <= 1.0
+
+    walk = walk_forward_evaluate(dataset, min_train_rows=80, folds=3)
+    assert walk["aggregate"]["folds_scored"] >= 2
+    assert 0.0 <= walk["aggregate"]["brier"] <= 1.0
