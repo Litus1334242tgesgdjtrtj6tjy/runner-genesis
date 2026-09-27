@@ -401,6 +401,11 @@ class SmartCapitalEngine:
             }
         wins = [x for x in returns if x > 0]
         losses = [x for x in returns if x < 0]
+        winner_holds = [
+            float(o.hold_seconds)
+            for o in observations
+            if o.hold_seconds is not None and o.realized_return is not None and float(o.realized_return) > 0
+        ]
         gains = sum(wins)
         loss_abs = abs(sum(losses))
         profit_factor = gains / loss_abs if loss_abs > 0 else None
@@ -450,6 +455,7 @@ class SmartCapitalEngine:
             "consistency_score": consistency,
             "repeatability_score": repeatability,
             "diversification_score": diversification,
+            "median_winner_hold_seconds": median(winner_holds) if winner_holds else None,
             "tokens_2x": sum(x >= 1.0 for x in returns),
             "tokens_3x": sum(x >= 2.0 for x in returns),
             "tokens_5x": sum(x >= 4.0 for x in returns),
