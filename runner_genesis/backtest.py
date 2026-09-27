@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import median
+from statistics import median, mean, pstdev
 import uuid
 
 from .orchestrator import RunnerGenesisOmega
@@ -32,39 +32,88 @@ class BacktestMetrics:
     entry_too_late_count: int = 0
     risk_reject_count: int = 0
     pending_invalidated_count: int = 0
+    failure_rate: float = 0.0
+    average_hold_seconds: float | None = None
+    median_hold_seconds: float | None = None
+    average_mfe: float | None = None
+    median_mfe: float | None = None
+    average_mae: float | None = None
+    median_mae: float | None = None
+    captured_mfe_ratio: float | None = None
+    pct_2x: float | None = None
+    pct_3x: float | None = None
+    pct_5x: float | None = None
+    pct_10x: float | None = None
+    sharpe_like: float | None = None
+    fee_to_turnover_pct: float = 0.0
 
 
-def _closed_trade_results(fills) -> list[tuple[float, float]]:
-    """Return (return_fraction, realized_pnl_eur) for fully closed PAPER cycles."""
-    state: dict[str, dict[str, float]] = {}
-    closed: list[tuple[float, float]] = []
+def _closed_trade_details(fills) -> list[dict]:
+    """Reconstruct fully closed PAPER cycles from executable fills."""
+    state: dict[str, dict[str, float | datetime]] = {}
+    closed: list[dict] = []
     for fill in sorted(fills, key=lambda x: x.timestamp):
         if fill.failed or fill.filled_eur <= 0 or fill.quantity <= 0:
             continue
-        s = state.setdefault(fill.token_mint, {"qty": 0.0, "cost": 0.0, "cycle_cost": 0.0, "realized": 0.0})
+        s = state.setdefault(
+            fill.token_mint,
+            {
+                "qty": 0.0,
+                "cost": 0.0,
+                "cycle_cost": 0.0,
+                "realized": 0.0,
+                "opened_at": fill.timestamp,
+            },
+        )
         if fill.side == "BUY":
+            if float(s["qty"]) <= 1e-12:
+                s["opened_at"] = fill.timestamp
             total_cost = float(fill.filled_eur) + float(fill.fees_eur)
-            s["qty"] += float(fill.quantity)
-            s["cost"] += total_cost
-            s["cycle_cost"] += total_cost
+            s["qty"] = float(s["qty"]) + float(fill.quantity)
+            s["cost"] = float(s["cost"]) + total_cost
+            s["cycle_cost"] = float(s["cycle_cost"]) + total_cost
             continue
-        if fill.side != "SELL" or s["qty"] <= 0:
+        if fill.side != "SELL" or float(s["qty"]) <= 0:
             continue
-        qty = min(s["qty"], float(fill.quantity))
-        avg_cost = s["cost"] / max(s["qty"], 1e-12)
+        qty = min(float(s["qty"]), float(fill.quantity))
+        avg_cost = float(s["cost"]) / max(float(s["qty"]), 1e-12)
         released = qty * avg_cost
-        # Allocate the sell fee proportionally if a simulated fill exceeds remaining qty.
         ratio = qty / max(float(fill.quantity), 1e-12)
         proceeds = qty * float(fill.execution_price) - float(fill.fees_eur) * ratio
         pnl = proceeds - released
-        s["realized"] += pnl
-        s["qty"] -= qty
-        s["cost"] = max(0.0, s["cost"] - released)
-        if s["qty"] <= 1e-10:
-            cycle_cost = max(s["cycle_cost"], 1e-12)
-            closed.append((s["realized"] / cycle_cost, s["realized"]))
-            state[fill.token_mint] = {"qty": 0.0, "cost": 0.0, "cycle_cost": 0.0, "realized": 0.0}
+        s["realized"] = float(s["realized"]) + pnl
+        s["qty"] = float(s["qty"]) - qty
+        s["cost"] = max(0.0, float(s["cost"]) - released)
+        if float(s["qty"]) <= 1e-10:
+            cycle_cost = max(float(s["cycle_cost"]), 1e-12)
+            opened_at = s["opened_at"]
+            closed.append({
+                "token_mint": fill.token_mint,
+                "return_fraction": float(s["realized"]) / cycle_cost,
+                "realized_pnl_eur": float(s["realized"]),
+                "opened_at": opened_at,
+                "closed_at": fill.timestamp,
+                "hold_seconds": max(
+                    0.0,
+                    (fill.timestamp - opened_at).total_seconds(),
+                ) if isinstance(opened_at, datetime) else None,
+            })
+            state[fill.token_mint] = {
+                "qty": 0.0,
+                "cost": 0.0,
+                "cycle_cost": 0.0,
+                "realized": 0.0,
+                "opened_at": fill.timestamp,
+            }
     return closed
+
+
+def _closed_trade_results(fills) -> list[tuple[float, float]]:
+    """Backward-compatible compact view of closed PAPER cycles."""
+    return [
+        (float(x["return_fraction"]), float(x["realized_pnl_eur"]))
+        for x in _closed_trade_details(fills)
+    ]
 
 
 class Backtester:
