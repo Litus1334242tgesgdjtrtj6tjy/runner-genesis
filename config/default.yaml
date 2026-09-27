@@ -130,6 +130,7 @@ helius_history:
   max_pages: 5
   min_funding_sol: 0.01
   refresh_seconds: 21600
+  max_concurrency: 4
 
 external_discovery:
   fomoscan_enabled: true
