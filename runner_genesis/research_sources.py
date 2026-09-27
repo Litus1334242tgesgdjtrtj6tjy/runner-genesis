@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -134,12 +135,14 @@ class FomoScanPumpProvider:
         *,
         base_url: str = "https://api.fomoscan.sh",
         timeout_seconds: float = 15.0,
+        max_retries: int = 3,
     ) -> None:
         if not api_key:
             raise ValueError("FOMOSCAN_API_KEY is required")
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = float(timeout_seconds)
+        self.max_retries = max(0, int(max_retries))
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
