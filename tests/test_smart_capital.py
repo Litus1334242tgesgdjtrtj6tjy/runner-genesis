@@ -43,7 +43,8 @@ def test_same_funder_reduces_effective_wallet_count():
     f = actor.cohort_features(['A', 'B', 'C'])
     assert f['raw_wallet_count'] == 3
     assert f['effective_wallet_count'] < 3
-    assert f['same_funder_concentration'] == 1.0
+    assert f['same_funder_concentration_raw'] == 1.0
+    assert 0.7 < f['same_funder_concentration'] < 1.0
 
 
 def test_weighted_consensus_and_entry_distance_point_in_time():
@@ -128,3 +129,15 @@ def test_consensus_alone_does_not_bypass_conviction_gate():
     assert features['weighted_smart_capital_consensus'] > 0
     assert features['conviction_score'] < 0.90
     assert features['signal_validity'] == 'NOT_CONFIRMED'
+
+
+def test_high_degree_funder_is_downweighted_as_service_hub():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    actor = ActorGraphEngine()
+    wallets = [f'W{i}' for i in range(20)]
+    for i, w in enumerate(wallets):
+        actor.observe_funding_link(w, 'COMMON_SERVICE', t0+timedelta(seconds=i), 0.95)
+    f = actor.cohort_features(wallets)
+    assert f['same_funder_concentration_raw'] == 1.0
+    assert f['same_funder_concentration'] < 0.4
+    assert f['effective_wallet_count'] > 5
