@@ -122,28 +122,62 @@ class PumpDiscoveryEngine:
         existing.append(rec)
 
     def wallet_context(self, wallet: str, as_of: datetime) -> dict[str, float | str | None]:
-        rows = [x for x in self.wallet_sources.get(wallet, []) if x.first_seen and x.first_seen <= as_of]
-        if not rows:
-            return {
-                "discovery_source_count": 0.0,
-                "pump_top_trader_present": 0.0,
-                "kol_present": 0.0,
-                "pump_rank": None,
-                "pump_rank_velocity": 0.0,
-                "pump_rank_acceleration": 0.0,
-            }
-        pump = [x for x in rows if x.source in {"PUMP_OFFICIAL", "PUMPFUN_TOP_TRADER"}]
-        kol = [x for x in rows if "KOL" in x.source]
-        latest_pump = max(pump, key=lambda x: x.last_verified or x.first_seen) if pump else None
-        source = latest_pump.source if latest_pump else "PUMP_OFFICIAL"
-        key = (source, wallet)
+        """Return discovery context using only observations available by the requested time.
+
+        Pump rank/velocity are reconstructed from immutable leaderboard snapshots rather
+        than mutable latest-wallet metadata, preventing future snapshots from leaking into
+        historical replay.
+        """
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+
+        max_age = max(0.0, float(self.cfg.max_snapshot_age_seconds))
+        pump_snaps = [
+            x for x in self.snapshots
+            if x.wallet_address == wallet
+            and x.source in {"PUMP_OFFICIAL", "PUMPFUN_TOP_TRADER"}
+            and x.observed_at <= as_of
+            and (as_of - x.observed_at).total_seconds() <= max_age
+        ]
+        pump_snaps.sort(key=lambda x: x.observed_at)
+        latest_pump = pump_snaps[-1] if pump_snaps else None
+
+        velocity = 0.0
+        acceleration = 0.0
+        same_source = [x for x in pump_snaps if latest_pump is not None and x.source == latest_pump.source]
+        if len(same_source) >= 2:
+            a, b = same_source[-2], same_source[-1]
+            if a.rank is not None and b.rank is not None:
+                dt = max((b.observed_at - a.observed_at).total_seconds(), 1.0)
+                velocity = (float(a.rank) - float(b.rank)) / dt * 3600.0
+                if len(same_source) >= 3:
+                    p = same_source[-3]
+                    if p.rank is not None and a.rank is not None:
+                        dt_prev = max((a.observed_at - p.observed_at).total_seconds(), 1.0)
+                        prev_v = (float(p.rank) - float(a.rank)) / dt_prev * 3600.0
+                        acceleration = (velocity - prev_v) / dt * 3600.0
+
+        source_rows = [
+            x for x in self.wallet_sources.get(wallet, [])
+            if x.first_seen and x.first_seen <= as_of
+            and x.source not in {"PUMP_OFFICIAL", "PUMPFUN_TOP_TRADER"}
+        ]
+        kol = [x for x in source_rows if "KOL" in x.source.upper()]
+        sources = {x.source for x in source_rows}
+        if latest_pump is not None:
+            sources.add(latest_pump.source)
+
         return {
-            "discovery_source_count": float(len({x.source for x in rows})),
-            "pump_top_trader_present": 1.0 if pump else 0.0,
+            "discovery_source_count": float(len(sources)),
+            "pump_top_trader_present": 1.0 if latest_pump is not None else 0.0,
             "kol_present": 1.0 if kol else 0.0,
-            "pump_rank": float(latest_pump.source_rank) if latest_pump and latest_pump.source_rank is not None else None,
-            "pump_rank_velocity": float(self._velocity.get(key, 0.0)),
-            "pump_rank_acceleration": float(self._acceleration.get(key, 0.0)),
+            "pump_rank": float(latest_pump.rank) if latest_pump and latest_pump.rank is not None else None,
+            "pump_rank_velocity": float(velocity),
+            "pump_rank_acceleration": float(acceleration),
+            "pump_snapshot_age_seconds": (
+                max(0.0, (as_of - latest_pump.observed_at).total_seconds())
+                if latest_pump is not None else None
+            ),
         }
 
     def token_wave_features(self, wallets: list[str], as_of: datetime, actor=None, events: list[Any] | None = None) -> dict[str, float]:
