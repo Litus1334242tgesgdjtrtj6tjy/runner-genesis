@@ -26,9 +26,11 @@ class ResearchSyncCoordinator:
 
     @property
     def enabled(self) -> bool:
+        # FomoScan can discover new Pump wallets automatically. Helius can still refresh
+        # wallets that were already discovered/persisted or manually seeded.
         return bool(
-            self.settings.external_discovery.fomoscan_enabled
-            and self.settings.fomoscan_api_key
+            (self.settings.external_discovery.fomoscan_enabled and self.settings.fomoscan_api_key)
+            or (self.settings.helius_history.enabled and self.settings.helius_api_key)
         )
 
     def status(self) -> dict[str, Any]:
@@ -93,6 +95,41 @@ class ResearchSyncCoordinator:
             },
         }
 
+    def _seed_rows_from_registry(self) -> list[dict[str, Any]]:
+        latest: dict[str, dict[str, Any]] = {}
+        for snap in self.engine.discovery.snapshots:
+            current = latest.get(snap.wallet_address)
+            if current is None or snap.observed_at > current["observed_at"]:
+                latest[snap.wallet_address] = {
+                    "wallet_address": snap.wallet_address,
+                    "username": snap.username,
+                    "rank": snap.rank,
+                    "monthly_pnl": snap.monthly_pnl,
+                    "source_window": snap.source_window,
+                    "source_confidence": snap.source_confidence,
+                    "observed_at": snap.observed_at,
+                }
+        for wallet, sources in self.engine.discovery.wallet_sources.items():
+            if wallet in latest:
+                continue
+            rank = min(
+                (x.source_rank for x in sources if x.source_rank is not None),
+                default=None,
+            )
+            latest[wallet] = {
+                "wallet_address": wallet,
+                "username": next((x.username for x in sources if x.username), None),
+                "rank": rank,
+                "monthly_pnl": None,
+                "source_window": next((x.source_window for x in sources if x.source_window), None),
+                "source_confidence": max((x.mapping_confidence for x in sources), default=0.5),
+                "observed_at": max(
+                    (x.last_verified or x.first_seen for x in sources if (x.last_verified or x.first_seen)),
+                    default=datetime.now(timezone.utc),
+                ),
+            }
+        return list(latest.values())
+
     async def sync_once(self, max_wallets: int | None = None) -> dict[str, Any]:
         if not self.enabled:
             result = {
@@ -103,43 +140,63 @@ class ResearchSyncCoordinator:
             self._last_result = result
             return result
 
-        provider = FomoScanPumpProvider(
-            self.settings.fomoscan_api_key,
-            base_url=self.settings.fomoscan_base_url,
-        )
-        rows, observed_at = await provider.pump_leaderboard()
-
+        rows: list[dict[str, Any]] = []
+        observed_at = datetime.now(timezone.utc)
+        accepted = 0
         callout_count = 0
-        if self.settings.fomo.enabled:
-            try:
-                callouts, callout_observed_at = await provider.pump_callouts(limit=100)
-                for row in callouts:
-                    obs = self._callout_observation(row, callout_observed_at)
-                    if obs is None:
-                        continue
-                    self.engine.fomo.ingest(obs)
-                    callout_count += 1
-                    if self.engine.repository:
-                        self.engine.repository.record_discovery({
-                            "token_mint": obs["token_mint"],
-                            "wallet_address": None,
-                            "observed_at": obs["timestamp"],
-                            "source": obs["source"],
-                            "kind": obs["kind"],
-                            "actor_key": obs["actor_key"],
-                        })
-            except Exception:
-                # Discovery remains usable even if the optional callout shape changes.
-                callout_count = 0
+        discovery_source = "PERSISTED_OR_MANUAL_REGISTRY"
 
-        accepted = self.engine.discovery.ingest_leaderboard(
-            rows,
-            observed_at=observed_at,
-            source="PUMPFUN_TOP_TRADER",
+        fomo_provider_enabled = bool(
+            self.settings.external_discovery.fomoscan_enabled
+            and self.settings.fomoscan_api_key
         )
-        if self.engine.repository and accepted:
-            for snap in self.engine.discovery.snapshots[-accepted:]:
-                self.engine.repository.record_leaderboard(snap.__dict__)
+        if fomo_provider_enabled:
+            provider = FomoScanPumpProvider(
+                self.settings.fomoscan_api_key,
+                base_url=self.settings.fomoscan_base_url,
+            )
+            rows, observed_at = await provider.pump_leaderboard()
+            discovery_source = "FOMOSCAN_PUMP"
+            if self.settings.fomo.enabled:
+                try:
+                    callouts, callout_observed_at = await provider.pump_callouts(limit=100)
+                    for row in callouts:
+                        obs = self._callout_observation(row, callout_observed_at)
+                        if obs is None:
+                            continue
+                        self.engine.fomo.ingest(obs)
+                        callout_count += 1
+                        if self.engine.repository:
+                            self.engine.repository.record_discovery({
+                                "token_mint": obs["token_mint"],
+                                "wallet_address": None,
+                                "observed_at": obs["timestamp"],
+                                "source": obs["source"],
+                                "kind": obs["kind"],
+                                "actor_key": obs["actor_key"],
+                            })
+                except Exception:
+                    callout_count = 0
+
+            accepted = self.engine.discovery.ingest_leaderboard(
+                rows,
+                observed_at=observed_at,
+                source="PUMPFUN_TOP_TRADER",
+            )
+            if self.engine.repository and accepted:
+                for snap in self.engine.discovery.snapshots[-accepted:]:
+                    self.engine.repository.record_leaderboard(snap.__dict__)
+        else:
+            rows = self._seed_rows_from_registry()
+            if rows:
+                observed_at = max(
+                    (
+                        row.get("observed_at")
+                        for row in rows
+                        if isinstance(row.get("observed_at"), datetime)
+                    ),
+                    default=observed_at,
+                )
 
         limit = int(max_wallets or self.settings.external_discovery.max_wallets_per_refresh)
         ranked = sorted(
@@ -152,7 +209,7 @@ class ResearchSyncCoordinator:
 
         backfills = []
         skipped_recent = 0
-        if self.settings.helius_history.enabled and self.settings.helius_api_key:
+        if self.settings.helius_history.enabled and self.settings.helius_api_key and ranked:
             client = HeliusWalletHistoryClient(self.settings.helius_api_key)
             service = WalletResearchBackfillService(client, repository=self.engine.repository)
             now = datetime.now(timezone.utc)
@@ -194,8 +251,12 @@ class ResearchSyncCoordinator:
                 backfills = list(await asyncio.gather(*(run_one(w) for w in due_wallets)))
 
         self._last_sync = datetime.now(timezone.utc)
+        status = "OK"
+        if not rows:
+            status = "WAITING_DISCOVERY_SOURCE"
         self._last_result = {
-            "status": "OK",
+            "status": status,
+            "discovery_source": discovery_source,
             "observed_at": observed_at,
             "leaderboard_rows": len(rows),
             "accepted_snapshots": accepted,
