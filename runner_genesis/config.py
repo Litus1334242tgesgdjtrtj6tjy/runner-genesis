@@ -132,6 +132,7 @@ class ExternalDiscoveryConfig(BaseModel):
     wallet_priority_emerging_weight: float = 0.18
     wallet_priority_recent_activity_weight: float = 0.12
     wallet_priority_independence_weight: float = 0.10
+    wallet_priority_cohort_weight: float = 0.08
     wallet_priority_data_gap_weight: float = 0.08
     wallet_priority_source_confidence_weight: float = 0.06
     wallet_priority_activity_half_life_seconds: float = 1800.0
