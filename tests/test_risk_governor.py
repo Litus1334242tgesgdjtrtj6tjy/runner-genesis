@@ -1,3 +1,4 @@
+from datetime import datetime, timezone, timedelta
 from runner_genesis.config import RiskConfig
 from runner_genesis.risk_governor import RiskGovernor
 from runner_genesis.ai_trader import TradeProposal,Action
@@ -27,3 +28,42 @@ def test_related_wallet_cohort_veto():
     })
     assert not d.approved
     assert 'WALLET_CLUSTER_CONCENTRATION' in d.reasons
+
+
+def test_daily_spend_and_loss_reset_on_new_utc_day():
+    cfg = RiskConfig(
+        min_liquidity_usd=10000,
+        max_daily_spend_eur=60,
+        max_daily_loss_eur=30,
+        max_account_pct_per_trade=1.0,
+        max_position_eur=100,
+    )
+    g = RiskGovernor(cfg)
+    a = PaperAccount(300, 300)
+    token = TokenState('M', liquidity_usd=100000)
+    p = TradeProposal(Action.ENTER, 'M', amount_eur=20)
+    day1 = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    day2 = day1 + timedelta(days=1)
+
+    a.advance_accounting_day(day1)
+    a.daily_spend_eur = 55
+    a.daily_realized_pnl_eur = -40
+    a.realized_pnl_eur = -100
+
+    blocked = g.evaluate(
+        p, a, token,
+        features={'sellability_score':1.0,'manipulation_risk':0.0,'entry_validity':'VALID'},
+        now=day1,
+    )
+    assert 'MAX_DAILY_SPEND' in blocked.reasons
+    assert 'MAX_DAILY_LOSS' in blocked.reasons
+
+    next_day = g.evaluate(
+        p, a, token,
+        features={'sellability_score':1.0,'manipulation_risk':0.0,'entry_validity':'VALID'},
+        now=day2,
+    )
+    assert 'MAX_DAILY_SPEND' not in next_day.reasons
+    assert 'MAX_DAILY_LOSS' not in next_day.reasons
+    assert a.daily_spend_eur == 0
+    assert a.daily_realized_pnl_eur == 0
