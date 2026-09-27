@@ -438,6 +438,17 @@ class ResearchSyncCoordinator:
             "selected_for_backfill": len(selected),
             "selected_top_wallets": sum(1 for x in selected if x.get("rank") is not None),
             "selected_emerging_wallets": sum(1 for x in selected if x.get("rank") is None),
+            "wallet_priority_enabled": bool(self.settings.external_discovery.wallet_priority_enabled),
+            "selected_wallet_priorities": [
+                {
+                    "wallet_address": x.get("wallet_address"),
+                    "rank": x.get("rank"),
+                    "discovery_kind": x.get("discovery_kind"),
+                    "priority_score": x.get("wallet_discovery_priority_score"),
+                    "priority_components": x.get("wallet_discovery_priority_components"),
+                }
+                for x in selected
+            ],
             "accepted_snapshots": accepted,
             "fomo_callouts_ingested": callout_count,
             "wallet_backfills": backfills,
