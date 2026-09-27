@@ -78,9 +78,13 @@ class RiskGovernor:
 
         if estimated_slippage_pct > self.cfg.max_slippage_pct:
             r.append('MAX_SLIPPAGE')
-        dd = (account.peak_equity_eur - account.equity_eur) / max(account.peak_equity_eur, 1e-9)
-        if dd > self.cfg.max_portfolio_drawdown_pct:
-            r.append('MAX_DRAWDOWN')
-        if account.daily_realized_pnl_eur < -self.cfg.max_daily_loss_eur:
-            r.append('MAX_DAILY_LOSS')
+
+        # Drawdown/daily-loss limits stop new risk. They must not trap an already-open
+        # position by rejecting a defensive reduction/exit after the limit has been hit.
+        if p.action in (Action.ENTER, Action.ADD):
+            dd = (account.peak_equity_eur - account.equity_eur) / max(account.peak_equity_eur, 1e-9)
+            if dd > self.cfg.max_portfolio_drawdown_pct:
+                r.append('MAX_DRAWDOWN')
+            if account.daily_realized_pnl_eur < -self.cfg.max_daily_loss_eur:
+                r.append('MAX_DAILY_LOSS')
         return RiskDecision(not r, p, r)
