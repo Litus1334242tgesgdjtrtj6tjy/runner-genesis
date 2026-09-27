@@ -1,5 +1,5 @@
 from __future__ import annotations
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -19,14 +19,42 @@ class FomoObservation:
 class FomoEngine:
     """Optional attention/discovery context. It is never an unconditional entry trigger."""
 
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg, max_dedupe_keys: int = 100_000) -> None:
         self.cfg = cfg
         self.by_token: dict[str, list[FomoObservation]] = defaultdict(list)
+        self.max_dedupe_keys = max(1000, int(max_dedupe_keys))
+        self._seen_keys: set[str] = set()
+        self._seen_order: deque[str] = deque()
 
-    def ingest(self, row: dict[str, Any]) -> FomoObservation:
+    @staticmethod
+    def _dedupe_key(obs: FomoObservation) -> str:
+        meta = obs.metadata or {}
+        raw_id = meta.get("raw_id") or meta.get("id") or meta.get("callout_id")
+        if raw_id is not None:
+            return f"{obs.source}|id|{raw_id}"
+        return "|".join([
+            obs.source,
+            obs.kind,
+            obs.token_mint,
+            obs.actor_key or "",
+            obs.timestamp.isoformat(),
+        ])
+
+    def _remember(self, key: str) -> None:
+        if key in self._seen_keys:
+            return
+        self._seen_keys.add(key)
+        self._seen_order.append(key)
+        while len(self._seen_order) > self.max_dedupe_keys:
+            old = self._seen_order.popleft()
+            self._seen_keys.discard(old)
+
+    def ingest(self, row: dict[str, Any]) -> FomoObservation | None:
         ts = row.get("timestamp") or datetime.now(timezone.utc)
         if isinstance(ts, str):
             ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
         obs = FomoObservation(
             token_mint=str(row["token_mint"]),
             timestamp=ts,
@@ -36,6 +64,10 @@ class FomoEngine:
             actor_key=row.get("actor_key"),
             metadata=row.get("metadata") or {},
         )
+        key = self._dedupe_key(obs)
+        if key in self._seen_keys:
+            return None
+        self._remember(key)
         self.by_token[obs.token_mint].append(obs)
         self.by_token[obs.token_mint].sort(key=lambda x: x.timestamp)
         return obs
