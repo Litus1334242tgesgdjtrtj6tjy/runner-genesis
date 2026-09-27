@@ -162,6 +162,9 @@ def account():
         'cash_eur': a.cash_eur,
         'equity_eur': a.equity_eur,
         'realized_pnl_eur': a.realized_pnl_eur,
+        'daily_spend_eur': a.daily_spend_eur,
+        'daily_realized_pnl_eur': a.daily_realized_pnl_eur,
+        'accounting_day_utc': a.accounting_day_utc,
         'positions': {k: v.__dict__ for k, v in a.positions.items()},
         'pending_orders': {
             k: {
