@@ -44,3 +44,42 @@ def test_top_trader_wave_uses_effective_wallets_and_recent_arrivals():
     assert features["new_top_traders_30s"] >= 1
     assert features["new_top_traders_60s"] == 3
     assert 0 <= features["top_trader_wave_score"] <= 1
+
+
+def test_wallet_context_uses_only_snapshots_available_by_decision_time():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    discovery = PumpDiscoveryEngine(PumpDiscoveryConfig(max_snapshot_age_seconds=3600))
+    discovery.ingest_leaderboard(
+        [{"wallet_address": "A", "rank": 10, "monthly_pnl": 100}],
+        observed_at=t0,
+        source="PUMPFUN_TOP_TRADER",
+    )
+    discovery.ingest_leaderboard(
+        [{"wallet_address": "A", "rank": 1, "monthly_pnl": 1000}],
+        observed_at=t0 + timedelta(minutes=10),
+        source="PUMPFUN_TOP_TRADER",
+    )
+
+    earlier = discovery.wallet_context("A", t0 + timedelta(minutes=5))
+    later = discovery.wallet_context("A", t0 + timedelta(minutes=15))
+
+    assert earlier["pump_rank"] == 10
+    assert earlier["pump_rank_velocity"] == 0.0
+    assert later["pump_rank"] == 1
+    assert later["pump_rank_velocity"] > 0
+
+
+def test_old_pump_snapshot_expires_from_context():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    discovery = PumpDiscoveryEngine(PumpDiscoveryConfig(max_snapshot_age_seconds=60))
+    discovery.ingest_leaderboard(
+        [{"wallet_address": "A", "rank": 1, "monthly_pnl": 1000}],
+        observed_at=t0,
+        source="PUMPFUN_TOP_TRADER",
+    )
+    fresh = discovery.wallet_context("A", t0 + timedelta(seconds=30))
+    old = discovery.wallet_context("A", t0 + timedelta(seconds=61))
+
+    assert fresh["pump_top_trader_present"] == 1.0
+    assert old["pump_top_trader_present"] == 0.0
+    assert old["pump_rank"] is None
