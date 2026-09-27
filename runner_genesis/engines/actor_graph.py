@@ -138,7 +138,7 @@ class ActorGraphEngine:
                 continue
             arr = local_by_token[e.token_mint]
             cutoff = e.timestamp - self.coevent_window
-            arr[:] = [x for x in arr if x.timestamp >= cutoff]
+            arr[:] = [x for x in arr if cutoff <= x.timestamp <= e.timestamp]
             for prev in arr:
                 if not prev.wallet or prev.wallet == e.wallet:
                     continue
