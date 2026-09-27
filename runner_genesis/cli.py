@@ -19,6 +19,7 @@ def main():
     sub.add_parser('doctor')
     s=sub.add_parser('build-dataset'); s.add_argument('--out',default='data/training/executable_runner.csv')
     s=sub.add_parser('train-genesis'); s.add_argument('dataset'); s.add_argument('--out',default='artifacts/models/genesis_model.joblib'); s.add_argument('--min-rows',type=int,default=100)
+    s=sub.add_parser('walk-forward'); s.add_argument('dataset'); s.add_argument('--target',default='y_executable_runner'); s.add_argument('--min-train-rows',type=int,default=100); s.add_argument('--folds',type=int,default=4)
     s=sub.add_parser('shadow'); s.add_argument('--program',action='append',default=[])
     args=ap.parse_args()
     if args.cmd=='demo': print(make_demo(args.out)); return
@@ -40,6 +41,10 @@ def main():
         from .training import train_genesis_from_dataset
         report=train_genesis_from_dataset(args.dataset,args.out,min_rows=args.min_rows)
         print(json.dumps({'out':args.out,'report':report},indent=2,default=str)); return
+    if args.cmd=='walk-forward':
+        from .training import walk_forward_evaluate
+        report=walk_forward_evaluate(args.dataset,target=args.target,min_train_rows=args.min_train_rows,folds=args.folds)
+        print(json.dumps(report,indent=2,default=str)); return
     if args.cmd=='shadow':
         import asyncio
         from .shadow import run_shadow
