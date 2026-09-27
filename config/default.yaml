@@ -131,6 +131,7 @@ helius_history:
   min_funding_sol: 0.01
   refresh_seconds: 21600
   max_concurrency: 4
+  hydrate_max_rows: 100000
 
 external_discovery:
   fomoscan_enabled: true
