@@ -14,6 +14,7 @@ from runner_genesis.training import (
     walk_forward_evaluate,
     _with_label_availability,
     _purge_before_boundary,
+    _safe_metric,
 )
 
 
@@ -109,3 +110,16 @@ def test_label_availability_purge_removes_boundary_leakage():
     eligible = _purge_before_boundary(prepared, boundary)
     assert list(eligible["decision_time"]) == [pd.Timestamp("2026-01-01T00:00:00Z")]
     assert all(eligible["label_available_at"] < boundary)
+
+
+
+def test_classification_metrics_include_calibration_and_top_n():
+    y = np.array([1, 0, 1, 0, 1, 0], dtype=int)
+    p = np.array([0.95, 0.80, 0.75, 0.20, 0.65, 0.10], dtype=float)
+    metrics = _safe_metric(y, p)
+    assert 0.0 <= metrics["precision_0_5"] <= 1.0
+    assert 0.0 <= metrics["recall_0_5"] <= 1.0
+    assert 0.0 <= metrics["f1_0_5"] <= 1.0
+    assert 0.0 <= metrics["precision_at_10pct"] <= 1.0
+    assert 0.0 <= metrics["ece_10bin"] <= 1.0
+    assert metrics["false_positive"] == 1.0
