@@ -119,6 +119,7 @@ trader:
   max_adds_per_position: 2
   default_position_eur: 10.0
   require_trained_for_entry: true
+  allow_untrained_paper_entry: true
 
 point_in_time:
   strict: true
