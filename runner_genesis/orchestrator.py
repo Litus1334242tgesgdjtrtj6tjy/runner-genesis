@@ -370,8 +370,17 @@ class RunnerGenesisOmega:
             if not fresh_quote:
                 return None, ['WAITING_FRESH_EXECUTION_QUOTE']
 
+        execution_features = dict(features)
+        if not execution_features.get('dominant_actor_cluster_id'):
+            signal_cluster = pending.signal_features.get('dominant_actor_cluster_id')
+            if signal_cluster:
+                execution_features['dominant_actor_cluster_id'] = signal_cluster
+                execution_features['dominant_actor_cluster_fraction'] = pending.signal_features.get(
+                    'dominant_actor_cluster_fraction', 0.0
+                )
+
         del self.pending_orders[mint]
-        fill, approved, reasons = self._execute(pending.proposal, token, now, features)
+        fill, approved, reasons = self._execute(pending.proposal, token, now, execution_features)
         if not approved:
             return fill, reasons
         return fill, []
@@ -525,6 +534,8 @@ class RunnerGenesisOmega:
                             'fusion_confidence': f.get('fusion_confidence'),
                             'weighted_smart_capital_consensus': f.get('weighted_smart_capital_consensus'),
                             'top_trader_wave_score': f.get('top_trader_wave_score'),
+                            'dominant_actor_cluster_id': f.get('dominant_actor_cluster_id'),
+                            'dominant_actor_cluster_fraction': f.get('dominant_actor_cluster_fraction'),
                         },
                     )
                 action_label = f'PENDING_{proposal.action.value}'
