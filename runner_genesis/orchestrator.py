@@ -269,7 +269,7 @@ class RunnerGenesisOmega:
 
         world = self.world.predict(f)
         f.update(world)
-        fly = self.fly.step(self._fly_embedding(f))
+        fly = self.fly.step(self._fly_embedding(f), key=e.token_mint)
         f.update(fly)
         mirofish = self.mirofish.rollouts(e.token_mint, e.timestamp, f)
         f.update(mirofish)
