@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import exp
 from statistics import median
 from typing import Any
@@ -287,6 +287,169 @@ class SmartCapitalEngine:
             "confidence": min(1.0, q.sample_size / max(float(self.cfg.quality_sample_target), 1.0)),
             **discovery,
         }
+
+    @staticmethod
+    def _window_stats(observations) -> dict[str, Any]:
+        returns = [float(x.realized_return) for x in observations if x.realized_return is not None]
+        if not returns:
+            return {
+                "sample_size": len(observations),
+                "win_rate": None,
+                "profit_factor": None,
+                "average_roi": None,
+                "median_roi": None,
+                "largest_win": None,
+                "largest_loss": None,
+                "max_drawdown": None,
+                "top1_pnl_share": None,
+                "top3_pnl_share": None,
+                "top5_pnl_share": None,
+                "consistency_score": None,
+                "repeatability_score": None,
+                "diversification_score": None,
+                "tokens_2x": 0,
+                "tokens_3x": 0,
+                "tokens_5x": 0,
+                "tokens_10x": 0,
+                "tokens_20x": 0,
+                "net_pnl": None,
+            }
+        wins = [x for x in returns if x > 0]
+        losses = [x for x in returns if x < 0]
+        gains = sum(wins)
+        loss_abs = abs(sum(losses))
+        profit_factor = gains / loss_abs if loss_abs > 0 else None
+        positives = sorted((max(0.0, x) for x in returns), reverse=True)
+        total_positive = sum(positives)
+
+        def share(k: int):
+            return sum(positives[:k]) / total_positive if total_positive > 0 else None
+
+        mean = sum(returns) / len(returns)
+        variance = sum((x - mean) ** 2 for x in returns) / len(returns)
+        sigma = variance ** 0.5
+        consistency = _clip(0.50 + 0.20 * mean - 0.18 * sigma)
+        top1 = share(1)
+        diversification = _clip(1.0 - float(top1 or 0.0))
+        repeatability = _clip(0.55 * (sum(x >= 1.0 for x in returns) / len(returns)) + 0.45 * (len(wins) / len(returns)))
+
+        # Equal-risk-unit drawdown proxy. This is not labelled as cash drawdown because
+        # historical position sizes can be unknown.
+        equity = peak = 1.0
+        max_dd = 0.0
+        for r in returns:
+            equity *= max(0.0, 1.0 + max(-1.0, r))
+            peak = max(peak, equity)
+            max_dd = max(max_dd, (peak - equity) / max(peak, 1e-12))
+
+        pnl_known = [
+            float(o.buy_eur) * float(o.realized_return)
+            for o in observations
+            if o.realized_return is not None and float(o.buy_eur or 0.0) > 0
+        ]
+        # net_pnl is only emitted when every resolved observation carries a common
+        # fiat-like quote notional. Mixed/unknown SOL quote values remain None.
+        net_pnl = sum(pnl_known) if len(pnl_known) == len(returns) else None
+        return {
+            "sample_size": len(observations),
+            "win_rate": len(wins) / len(returns),
+            "profit_factor": profit_factor,
+            "average_roi": mean,
+            "median_roi": median(returns),
+            "largest_win": max(returns),
+            "largest_loss": min(returns),
+            "max_drawdown": max_dd,
+            "top1_pnl_share": top1,
+            "top3_pnl_share": share(3),
+            "top5_pnl_share": share(5),
+            "consistency_score": consistency,
+            "repeatability_score": repeatability,
+            "diversification_score": diversification,
+            "tokens_2x": sum(x >= 1.0 for x in returns),
+            "tokens_3x": sum(x >= 2.0 for x in returns),
+            "tokens_5x": sum(x >= 4.0 for x in returns),
+            "tokens_10x": sum(x >= 9.0 for x in returns),
+            "tokens_20x": sum(x >= 19.0 for x in returns),
+            "net_pnl": net_pnl,
+        }
+
+    def wallet_metrics_window(self, wallet: str, as_of: datetime, store: MarketStateStore, days: int = 30) -> dict[str, Any]:
+        cutoff = as_of - timedelta(days=max(1, int(days)))
+        observations = [
+            o for o in store.resolved_wallet_history_as_of(wallet, as_of)
+            if o.resolved_at >= cutoff
+        ]
+        stats = self._window_stats(observations)
+        full = self.wallet_metrics(wallet, as_of, store)
+        quality = float(full.get("wallet_quality_score") or 0.0)
+        swing = float(full.get("swing_score") or 0.0)
+        hold = float(full.get("hold_score") or 0.0)
+        consistency = float(stats.get("consistency_score") or 0.0)
+        repeatability = float(stats.get("repeatability_score") or 0.0)
+        diversification = float(stats.get("diversification_score") or 0.0)
+        dd = float(stats.get("max_drawdown") or 0.0)
+        sample_quality = _clip(float(stats["sample_size"]) / 20.0)
+        smart_30d_score = _clip(
+            0.25 * quality
+            + 0.18 * consistency
+            + 0.17 * repeatability
+            + 0.12 * diversification
+            + 0.10 * (1.0 - dd)
+            + 0.08 * swing
+            + 0.05 * hold
+            + 0.05 * sample_quality
+        )
+        return {
+            **full,
+            **stats,
+            "window_days": int(days),
+            "smart_capital_30d_score": smart_30d_score,
+            "data_quality_score": _clip(0.55 * sample_quality + 0.45 * float(full.get("confidence") or 0.0)),
+        }
+
+    def emerging_wallet_metrics(self, wallet: str, as_of: datetime, store: MarketStateStore) -> dict[str, Any]:
+        m7 = self.wallet_metrics_window(wallet, as_of, store, 7)
+        m30 = self.wallet_metrics_window(wallet, as_of, store, 30)
+        q7 = float(m7.get("smart_capital_30d_score") or 0.0)
+        q30 = float(m30.get("smart_capital_30d_score") or 0.0)
+        growth = max(-1.0, min(1.0, q7 - q30))
+        recent_sample = int(m7.get("sample_size") or 0)
+        concentration = float(m7.get("top1_pnl_share") or 1.0)
+        consistency = float(m7.get("consistency_score") or 0.0)
+        repeatability = float(m7.get("repeatability_score") or 0.0)
+        score = _clip(
+            0.30 * _clip(0.5 + growth)
+            + 0.22 * consistency
+            + 0.20 * repeatability
+            + 0.13 * _clip(recent_sample / 8.0)
+            + 0.15 * _clip(1.0 - concentration)
+        )
+        qualifies = bool(recent_sample >= 5 and score >= 0.60 and concentration <= 0.70)
+        return {
+            "wallet_address": wallet,
+            "emerging_smart_wallet_score": score,
+            "emerging_smart_wallet": qualifies,
+            "quality_velocity_7d_vs_30d": growth,
+            "recent_sample_size_7d": recent_sample,
+            "recent_top1_pnl_share": m7.get("top1_pnl_share"),
+            "recent_consistency": m7.get("consistency_score"),
+            "recent_repeatability": m7.get("repeatability_score"),
+        }
+
+    def true_smart_capital_30d(self, wallets: list[str], as_of: datetime, store: MarketStateStore, limit: int = 100) -> list[dict[str, Any]]:
+        rows = []
+        for wallet in dict.fromkeys(w for w in wallets if w):
+            row = self.wallet_metrics_window(wallet, as_of, store, 30)
+            row.update(self.emerging_wallet_metrics(wallet, as_of, store))
+            rows.append(row)
+        rows.sort(
+            key=lambda x: (
+                float(x.get("smart_capital_30d_score") or 0.0),
+                int(x.get("sample_size") or 0),
+            ),
+            reverse=True,
+        )
+        return rows[: max(1, int(limit))]
 
     def token_features(self, mint: str, now: datetime, store: MarketStateStore, actor: ActorGraphEngine) -> dict[str, float | str | None]:
         active = [p for (w, m), p in self.positions.items() if m == mint and p.retained_fraction > 0.02]
