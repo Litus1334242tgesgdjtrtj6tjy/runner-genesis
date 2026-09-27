@@ -126,6 +126,29 @@ class ActorGraphEngine:
             self._seen_event_ids.discard(expired)
         return True
 
+    def observe_historical_batch(self, events: list[MarketEvent]) -> None:
+        """Add historical co-buy evidence without perturbing the live recent-event buffer."""
+        local_by_token: dict[str, list[MarketEvent]] = defaultdict(list)
+        for e in sorted(events, key=lambda x: (x.timestamp, x.event_id)):
+            if not self._accept_event_once(e.event_id):
+                continue
+            if e.wallet:
+                self.graph.add_node(e.wallet, kind="wallet")
+            if e.event_type not in BUY_EVENTS or not e.wallet:
+                continue
+            arr = local_by_token[e.token_mint]
+            cutoff = e.timestamp - self.coevent_window
+            arr[:] = [x for x in arr if x.timestamp >= cutoff]
+            for prev in arr:
+                if not prev.wallet or prev.wallet == e.wallet:
+                    continue
+                dt = (e.timestamp - prev.timestamp).total_seconds()
+                if dt < 0 or dt > self.coevent_window.total_seconds():
+                    continue
+                conf = max(0.10, 0.60 * (1.0 - dt / max(self.coevent_window.total_seconds(), 1)))
+                self._link(prev.wallet, e.wallet, "CO_BUYS", conf, e.timestamp)
+            arr.append(e)
+
     def observe(self, e: MarketEvent) -> None:
         if not self._accept_event_once(e.event_id):
             return
