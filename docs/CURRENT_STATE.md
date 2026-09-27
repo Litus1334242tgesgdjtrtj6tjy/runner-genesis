@@ -2,7 +2,7 @@
 
 VERSION: 0.2.0-development
 BRANCH: work/v0.2-smart-capital-world-model
-LATEST VERIFIED CODE CHECKPOINT: 8751dd0b3555864fa73df646393258358995234d
+LATEST VERIFIED CODE CHECKPOINT: 48f3f57b54914ca545debf7201e32b8e0a8de960
 SAFE_MODE_STATUS: PAPER / SHADOW / BACKTEST only. LIVE_TRADING=false. No private-key sender exists.
 
 ## Implemented
@@ -47,3 +47,19 @@ Do not commit either secret.
 ## Scientific status
 IMPLEMENTED and TESTED does not mean VALIDATED EDGE.
 Genesis remains UNTRAINED unless a trained artifact is supplied. MiroFish/FlyWire/FOMO are experimental context modules. No claim of profitable predictive edge is made until chronological walk-forward/OOS evaluation on real point-in-time data succeeds.
+
+
+## Later hardening in this branch
+- FlyWire recurrent state is isolated per token, eliminating cross-token state contamination.
+- Pump leaderboard context is reconstructed strictly as-of decision time and stale snapshots expire.
+- Shared-funder cohort evidence is downweighted for high-degree service/exchange hubs, with a scalability cap that avoids quadratic wallet cliques.
+- Helius history refuses to treat swap proceeds as wallet funding; generic webhook SWAP settlement is also refused as direct-transfer evidence.
+- Explicit migration evidence is distinct from token creation evidence.
+- Persisted wallet outcomes, funding evidence and Pump snapshots hydrate across restarts.
+- Research refresh can run with Helius only for already seeded/persisted wallets; FomoScan remains optional for automatic new Pump discovery.
+- FOMO/callout observations are deduplicated.
+- PAPER portfolio cash/open positions restore from persisted fills after restart.
+- Daily paper spend/loss counters reset by UTC day and are separate from lifetime PnL.
+- Backtest/replay CLI is isolated from persistent PAPER state.
+- Executable-runner dataset construction, chronological calibrated Genesis training and expanding walk-forward evaluation are implemented.
+- Windows readiness checker: scripts\CHECK_SETUP.bat.
