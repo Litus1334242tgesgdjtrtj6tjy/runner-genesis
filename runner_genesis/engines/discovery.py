@@ -181,7 +181,33 @@ class PumpDiscoveryEngine:
         }
 
     def token_wave_features(self, wallets: list[str], as_of: datetime, actor=None, events: list[Any] | None = None) -> dict[str, float]:
-        if not wallets:
+        buy_like = {
+            "BUY",
+            "RUNNER_HOLDER_ENTRY",
+            "RUNNER_HOLDER_ADD",
+            "SMART_WALLET_NEW_ENTRY",
+            "SMART_WALLET_ADD",
+        }
+
+        participant_wallets = list(dict.fromkeys(w for w in wallets if w))
+        if events:
+            recent: set[str] = set()
+            window = max(1.0, float(self.cfg.participant_window_seconds))
+            for ev in events:
+                wallet = getattr(ev, "wallet", None)
+                ts = getattr(ev, "timestamp", None)
+                et = getattr(ev, "event_type", None)
+                if not wallet or ts is None:
+                    continue
+                etv = getattr(et, "value", str(et))
+                if etv not in buy_like:
+                    continue
+                age = (as_of - ts).total_seconds()
+                if 0 <= age <= window:
+                    recent.add(wallet)
+            participant_wallets = sorted(recent)
+
+        if not participant_wallets:
             return {
                 "top_trader_present": 0.0,
                 "top_trader_count": 0.0,
@@ -194,16 +220,17 @@ class PumpDiscoveryEngine:
                 "top_trader_wave_score": 0.0,
                 "kol_wave_score": 0.0,
             }
+
         top_wallets: list[str] = []
         kol_wallets: list[str] = []
         vel = []
-        for w in set(wallets):
+        for w in set(participant_wallets):
             ctx = self.wallet_context(w, as_of)
             if float(ctx.get("pump_top_trader_present") or 0) > 0:
                 top_wallets.append(w)
+                vel.append(max(0.0, float(ctx.get("pump_rank_velocity") or 0.0)))
             if float(ctx.get("kol_present") or 0) > 0:
                 kol_wallets.append(w)
-            vel.append(max(0.0, float(ctx.get("pump_rank_velocity") or 0.0)))
 
         top_count = len(top_wallets)
         kol_count = len(kol_wallets)
@@ -221,9 +248,8 @@ class PumpDiscoveryEngine:
                 et = getattr(ev, "event_type", None)
                 if wallet not in top_set or ts is None:
                     continue
-                # Any explicit BUY-like event in the trailing window counts once per wallet.
                 etv = getattr(et, "value", str(et))
-                if etv not in {"BUY", "RUNNER_HOLDER_ENTRY", "RUNNER_HOLDER_ADD", "SMART_WALLET_NEW_ENTRY", "SMART_WALLET_ADD"}:
+                if etv not in buy_like:
                     continue
                 age = (as_of - ts).total_seconds()
                 if 0 <= age <= 60:
