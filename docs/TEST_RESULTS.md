@@ -1,10 +1,10 @@
 # Test Results
 
 LATEST VERIFIED CODE CHECKPOINT:
-8751dd0b3555864fa73df646393258358995234d
+48f3f57b54914ca545debf7201e32b8e0a8de960
 
 GitHub Actions:
-- Python pytest: **35 passed in 3.29s**
+- Python pytest: **53 passed**
 - Frontend production build: **success**
 - Demo backtest smoke: **success**
 - Component ablation smoke: **success**
@@ -44,3 +44,18 @@ Coverage now includes:
 - persisted wallet/funding research hydration after restart
 - executable closed-trade metric reconstruction
 - safe ablation configurations
+
+
+Additional coverage added after the earlier checkpoint includes:
+- FlyWire state isolation per token
+- Pump snapshot freshness and future-leakage prevention
+- shared-funder service-hub downweighting/scalability
+- swap-proceeds exclusion from funding evidence
+- token creation vs migration normalization
+- Helius-only research refresh
+- FOMO callout deduplication
+- daily paper accounting reset
+- PAPER portfolio restoration after restart
+- executable-runner future labels
+- chronological calibrated Genesis training
+- expanding walk-forward evaluation
