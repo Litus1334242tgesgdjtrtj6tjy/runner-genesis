@@ -244,6 +244,31 @@ class RuntimeRepository:
             s.add(FillRow(timestamp=fill.timestamp, token_mint=fill.token_mint, side=fill.side, filled_eur=fill.filled_eur, execution_price=fill.execution_price, fees_eur=fill.fees_eur, failed=fill.failed, payload_json=_json(fill.__dict__)))
             s.commit()
 
+    def load_fills(self, limit: int = 100_000) -> list[dict]:
+        with self.Session() as s:
+            rows = s.execute(
+                select(FillRow)
+                .order_by(FillRow.timestamp.asc(), FillRow.id.asc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            out = []
+            for r in rows:
+                try:
+                    payload = json.loads(r.payload_json) if r.payload_json else {}
+                except Exception:
+                    payload = {}
+                payload.update({
+                    'token_mint': r.token_mint,
+                    'side': r.side,
+                    'filled_eur': r.filled_eur,
+                    'execution_price': r.execution_price,
+                    'fees_eur': r.fees_eur,
+                    'failed': r.failed,
+                    'timestamp': r.timestamp,
+                })
+                out.append(payload)
+            return out
+
     def record_wallet_metrics(self, wallet: str, observed_at: datetime, payload: dict) -> None:
         with self.Session() as s:
             s.add(WalletMetricRow(wallet_address=wallet, observed_at=observed_at, payload_json=_json(payload)))
