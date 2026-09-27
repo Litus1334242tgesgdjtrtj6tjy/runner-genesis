@@ -32,6 +32,7 @@ class MiroFishRolloutEngine:
         "same_funder_concentration",
         "top_trader_independence_ratio",
         "data_quality_score",
+        "early_formation_score",
     )
 
     def __init__(self, cfg, deterministic: bool = False) -> None:
@@ -84,11 +85,13 @@ class MiroFishRolloutEngine:
         accum = float(f.get("accumulation_score", 0.0) or 0.0)
         top_wave = float(f.get("top_trader_wave_score", 0.0) or 0.0)
         fomo = float(f.get("fomo_score", 0.0) or 0.0)
+        formation = float(f.get("early_formation_score", 0.0) or 0.0)
         if not (
             consensus >= float(self.cfg.trigger_min_consensus)
             or accum >= float(self.cfg.trigger_min_accumulation)
             or top_wave >= float(self.cfg.trigger_min_top_trader_wave)
             or fomo >= float(self.cfg.trigger_min_fomo)
+            or formation >= float(self.cfg.trigger_min_early_formation)
         ):
             return {
                 "mirofish_status": "NOT_TRIGGERED",
@@ -97,6 +100,7 @@ class MiroFishRolloutEngine:
                 "mirofish_trigger_accumulation": accum,
                 "mirofish_trigger_top_trader_wave": top_wave,
                 "mirofish_trigger_fomo": fomo,
+                "mirofish_trigger_early_formation": formation,
             }
 
         signature = self._driver_signature(f)
@@ -133,7 +137,13 @@ class MiroFishRolloutEngine:
             if deadline is not None and time.perf_counter() > deadline and actual >= 8:
                 break
             actual += 1
-            capital = 0.47 * consensus + 0.27 * accum + 0.10 * world_prior + 0.16 * independent_breadth
+            capital = (
+                0.43 * consensus
+                + 0.24 * accum
+                + 0.09 * world_prior
+                + 0.14 * independent_breadth
+                + 0.10 * formation
+            )
             holder = persistence
             liquidity = 0.45 + 0.45 * integrity
             distribution = min(1.0, dump * 0.55 + 0.25 * coordinated_risk)
@@ -147,6 +157,7 @@ class MiroFishRolloutEngine:
                     + 0.09 * fomo
                     + 0.08 * world_prior
                     + 0.11 * independent_breadth
+                    + 0.10 * formation
                     - 0.10 * coordinated_risk
                 )
                 if rng.random() < max(0.01, min(0.65, 0.05 + arrival_drive)):
@@ -192,6 +203,7 @@ class MiroFishRolloutEngine:
             "mirofish_data_quality": dq,
             "mirofish_independent_breadth": independent_breadth,
             "mirofish_coordinated_cohort_risk": coordinated_risk,
+            "mirofish_early_formation_input": formation,
             "mirofish_cached": False,
             "mirofish_deterministic": self.deterministic,
         }
