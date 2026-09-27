@@ -54,6 +54,8 @@ class RiskGovernor:
                 r.append('MANIPULATION_RISK')
             if str(f.get('entry_validity', 'VALID')) == 'ENTRY_TOO_LATE':
                 r.append('ENTRY_TOO_LATE')
+            if bool(f.get('fusion_risk_veto', False)):
+                r.append('FUSION_RISK_VETO')
 
         if estimated_slippage_pct > self.cfg.max_slippage_pct:
             r.append('MAX_SLIPPAGE')
