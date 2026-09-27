@@ -94,7 +94,7 @@ class RunnerGenesisOmega:
         self.cohorts = CohortDiscoveryEngine()
         self.fusion = MultiBrainStateFusionEngine()
         self.exec_alpha = ExecutableAlphaModel()
-        self.trader = AIPaperTrader(settings.trader)
+        self.trader = AIPaperTrader(settings.trader, paper_only=settings.paper_only)
         self.risk = RiskGovernor(settings.risk)
         self.execution = PaperExecutionEngine(settings.execution)
         self.portfolio = PortfolioLedger(settings.paper_starting_capital_eur)
