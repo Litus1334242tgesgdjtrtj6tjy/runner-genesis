@@ -128,6 +128,20 @@ class RunnerGenesisOmega:
                 self.portfolio.apply_fill(fill)
                 if self.repository:
                     self.repository.record_fill(fill)
+                    self.repository.record_paper_update(
+                        proposal.token_mint,
+                        fill.timestamp,
+                        f"FILL_{fill.side}" if not fill.failed else "FILL_FAILED",
+                        {
+                            "proposal_action": proposal.action.value,
+                            "filled_eur": fill.filled_eur,
+                            "execution_price": fill.execution_price,
+                            "fees_eur": fill.fees_eur,
+                            "slippage_pct": fill.slippage_pct,
+                            "failed": fill.failed,
+                            "partial": fill.partial,
+                        },
+                    )
         return fill, rd.approved, rd.reasons
 
     def _execute_due_pending(self, mint: str, now: datetime, token, features: dict) -> tuple[PaperFill | None, list[str]]:
@@ -136,6 +150,11 @@ class RunnerGenesisOmega:
             return None, []
         del self.pending_orders[mint]
         if str(features.get('entry_validity')) != 'VALID':
+            if self.repository:
+                self.repository.record_paper_update(
+                    mint, now, 'PENDING_SIGNAL_INVALIDATED',
+                    {'entry_validity': features.get('entry_validity'), 'signal_time': pending.signal_time, 'due_time': pending.due_time},
+                )
             return None, ['PENDING_SIGNAL_INVALIDATED']
         fill, approved, reasons = self._execute(pending.proposal, token, now, features)
         if not approved:
@@ -259,6 +278,18 @@ class RunnerGenesisOmega:
             if pre_rd.approved and e.token_mint not in self.pending_orders:
                 due = e.timestamp + timedelta(seconds=float(self.settings.execution.execution_delay_seconds))
                 self.pending_orders[e.token_mint] = PendingPaperOrder(proposal, e.timestamp, due, dict(f))
+                if self.repository:
+                    self.repository.record_paper_update(
+                        e.token_mint, e.timestamp, f'PENDING_{proposal.action.value}',
+                        {
+                            'due_time': due,
+                            'amount_eur': proposal.amount_eur,
+                            'fusion_research_score': f.get('fusion_research_score'),
+                            'fusion_confidence': f.get('fusion_confidence'),
+                            'weighted_smart_capital_consensus': f.get('weighted_smart_capital_consensus'),
+                            'top_trader_wave_score': f.get('top_trader_wave_score'),
+                        },
+                    )
                 action_label = f'PENDING_{proposal.action.value}'
         elif proposal.action in (Action.PROTECT, Action.PARTIAL_EXIT, Action.REDUCE, Action.EXIT, Action.KEEP_RUNNER_BAG):
             immediate_fill, approved, reasons = self._execute(proposal, token, e.timestamp, f)
