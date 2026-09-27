@@ -387,7 +387,7 @@ class ResearchSyncCoordinator:
         backfills = []
         if self.settings.helius_history.enabled and self.settings.helius_api_key and selected:
             client = HeliusWalletHistoryClient(self.settings.helius_api_key)
-            service = WalletResearchBackfillService(client, repository=self.engine.repository)
+            service = WalletResearchBackfillService(client, repository=self.engine.repository, min_funding_sol=self.settings.helius_history.min_funding_sol)
             due_wallets = [
                 str(row.get("wallet_address") or "").strip()
                 for row in selected
