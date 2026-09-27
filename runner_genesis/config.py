@@ -50,6 +50,7 @@ class TraderConfig(BaseModel):
     max_adds_per_position: int = 2
     default_position_eur: float = 10.0
     require_trained_for_entry: bool = True
+    allow_untrained_paper_entry: bool = True
 
 
 class SmartCapitalConfig(BaseModel):
