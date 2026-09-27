@@ -196,7 +196,7 @@ class RunnerGenesisOmega:
         hyper = self.hyper.features(e.token_mint, e.timestamp)
         active_wallets = [x.wallet for x in token.events[-128:] if getattr(x, 'wallet', None) and getattr(x, 'event_type', None) in BUY_TYPES]
         quantum = self.quantum.features(self.actor.graph, active_wallets)
-        discovery = self.discovery.token_wave_features(active_wallets, e.timestamp)
+        discovery = self.discovery.token_wave_features(active_wallets, e.timestamp, actor=self.actor, events=token.events[-256:])
         smart = self.smart.token_features(e.token_mint, e.timestamp, self.store, self.actor)
 
         f: dict = {}
