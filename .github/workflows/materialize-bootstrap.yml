@@ -32,7 +32,24 @@ jobs:
           git add -A
           if git diff --cached --quiet; then
             echo "No materialized changes"
-            exit 0
+          else
+            git commit -m "bootstrap: materialize source [skip bootstrap]"
+            git push origin HEAD:work/v0.2-smart-capital-world-model
           fi
-          git commit -m "bootstrap: materialize source [skip bootstrap]"
-          git push origin HEAD:work/v0.2-smart-capital-world-model
+      - name: Export branch source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-genesis-worktree
+          path: |
+            .env.example
+            README.md
+            pyproject.toml
+            requirements.txt
+            config
+            docs
+            frontend
+            runner_genesis
+            scripts
+            tests
+          if-no-files-found: error
+          retention-days: 7
