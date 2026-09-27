@@ -246,6 +246,13 @@ class RunnerGenesisOmega:
                     partial=bool(row.get('partial', False)),
                     timestamp=ts,
                     reason=str(row.get('reason') or ''),
+                    protocol_fee_bps=row.get('protocol_fee_bps'),
+                    fee_source=str(row.get('fee_source') or 'CONFIG_FALLBACK'),
+                    fee_schedule_version=row.get('fee_schedule_version'),
+                    fee_confidence=float(row.get('fee_confidence') or 0.0),
+                    network_fee_eur=float(row.get('network_fee_eur') or 0.0),
+                    risk_cluster_id=row.get('risk_cluster_id'),
+                    risk_cluster_fraction=float(row.get('risk_cluster_fraction') or 0.0),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -300,6 +307,10 @@ class RunnerGenesisOmega:
         if rd.approved:
             fill = self.execution.execute(proposal, token, now, position_qty)
             if fill is not None:
+                if fill.side == 'BUY':
+                    cluster_id = features.get('dominant_actor_cluster_id')
+                    fill.risk_cluster_id = str(cluster_id) if cluster_id else None
+                    fill.risk_cluster_fraction = float(features.get('dominant_actor_cluster_fraction', 0.0) or 0.0)
                 applied = self.portfolio.apply_fill(fill)
                 if not applied:
                     return None, False, rd.reasons + ['PORTFOLIO_REJECTED_FILL']
@@ -317,6 +328,8 @@ class RunnerGenesisOmega:
                             "slippage_pct": fill.slippage_pct,
                             "failed": fill.failed,
                             "partial": fill.partial,
+                            "risk_cluster_id": getattr(fill, 'risk_cluster_id', None),
+                            "risk_cluster_fraction": getattr(fill, 'risk_cluster_fraction', 0.0),
                         },
                     )
         return fill, rd.approved, rd.reasons
