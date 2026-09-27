@@ -56,9 +56,12 @@ class DexScreenerEnricher:
                         e.token_age_seconds=max(0.0,e.timestamp.timestamp()-float(p['pairCreatedAt'])/1000.0)
                     e.metadata['dexscreener_pair']=p.get('pairAddress')
                     e.metadata['dexscreener_dex']=p.get('dexId')
-            if e.usd_value is None and e.sol_value is not None:
+            if e.sol_value is not None:
                 sol=await self._sol_usd()
-                if sol is not None: e.usd_value=float(e.sol_value)*sol
+                if sol is not None:
+                    e.metadata['sol_usd']=float(sol)
+                    if e.usd_value is None:
+                        e.usd_value=float(e.sol_value)*float(sol)
         except Exception as ex:
             e.metadata['market_enrichment_error']=type(ex).__name__
         return e
