@@ -305,14 +305,16 @@ class ResearchSyncCoordinator:
                 backfills = list(await asyncio.gather(*(run_one(w) for w in due_wallets)))
 
         self._last_sync = datetime.now(timezone.utc)
-        status = "OK"
-        if not rows:
-            status = "WAITING_DISCOVERY_SOURCE"
+        status = "OK" if qualification_by_wallet else "WAITING_DISCOVERY_SOURCE"
         self._last_result = {
             "status": status,
             "discovery_source": discovery_source,
             "observed_at": observed_at,
             "leaderboard_rows": len(rows),
+            "qualification_candidates": len(qualification_by_wallet),
+            "selected_for_backfill": len(selected),
+            "selected_top_wallets": sum(1 for x in selected if x.get("rank") is not None),
+            "selected_emerging_wallets": sum(1 for x in selected if x.get("rank") is None),
             "accepted_snapshots": accepted,
             "fomo_callouts_ingested": callout_count,
             "wallet_backfills": backfills,
