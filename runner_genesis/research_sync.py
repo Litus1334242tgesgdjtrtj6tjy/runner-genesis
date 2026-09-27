@@ -164,7 +164,9 @@ class ResearchSyncCoordinator:
                         obs = self._callout_observation(row, callout_observed_at)
                         if obs is None:
                             continue
-                        self.engine.fomo.ingest(obs)
+                        ingested = self.engine.fomo.ingest(obs)
+                        if ingested is None:
+                            continue
                         callout_count += 1
                         if self.engine.repository:
                             self.engine.repository.record_discovery({
