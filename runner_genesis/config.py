@@ -108,7 +108,9 @@ class HeliusHistoryConfig(BaseModel):
 
 class ExternalDiscoveryConfig(BaseModel):
     fomoscan_enabled: bool = False
+    auto_refresh: bool = False
     refresh_seconds: float = 300.0
+    max_wallets_per_refresh: int = 25
 
 
 class Settings(BaseModel):
