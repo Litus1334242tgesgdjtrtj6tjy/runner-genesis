@@ -88,6 +88,18 @@ class AlertEngine:
             add('KOL_WAVE', 'KOL-discovery wave context detected')
         if float(features.get('fomo_score', 0.0) or 0.0) >= 0.65:
             add('FOMO_ACCELERATION', 'Independent attention/FOMO sources are accelerating')
+        if float(features.get('early_formation_score', 0.0) or 0.0) >= 0.55:
+            add(
+                'EARLY_SMART_CAPITAL_FORMATION',
+                'Independent Smart Capital is accelerating before excessive price extension',
+                'INFO',
+                {
+                    'score': features.get('early_formation_score'),
+                    'smart_growth': features.get('early_formation_smart_growth'),
+                    'entry_headroom': features.get('early_formation_entry_headroom'),
+                    'price_return': features.get('early_formation_price_return'),
+                },
+            )
         if float(features.get('mirofish_collapse_frequency', 0.0) or 0.0) >= 0.60:
             add('MIROFISH_COLLAPSE_RISK_RISING', 'MiroFish simulation collapse frequency is elevated', 'WARN')
         return emitted
