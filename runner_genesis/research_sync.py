@@ -7,6 +7,7 @@ from typing import Any
 
 from .ingestion.helius_history import HeliusWalletHistoryClient
 from .research_sources import FomoScanPumpProvider, WalletResearchBackfillService
+from .engines.wallet_discovery_priority import WalletDiscoveryPriorityEngine
 
 
 class ResearchSyncCoordinator:
@@ -23,6 +24,7 @@ class ResearchSyncCoordinator:
         self._last_backfill: dict[str, datetime] = {}
         self._last_sync: datetime | None = None
         self._last_result: dict[str, Any] = {"status": "NOT_RUN"}
+        self.wallet_priority = WalletDiscoveryPriorityEngine(settings.external_discovery)
 
     @property
     def enabled(self) -> bool:
