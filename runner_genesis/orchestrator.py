@@ -343,6 +343,9 @@ class RunnerGenesisOmega:
         self._persisted_transition_count = len(self.smart.transitions)
 
     def process(self, e: MarketEvent) -> ProcessResult:
+        if e.event_id and e.event_id in self._processed_event_ids:
+            return self._duplicate_result(e)
+
         gate = self.candidate_gate.evaluate(e)
         if not gate.allowed:
             snapshot = DecisionSnapshot(
@@ -353,7 +356,9 @@ class RunnerGenesisOmega:
             self.decisions.append(snapshot)
             if self.repository:
                 self.repository.record_event(e); self.repository.record_decision(snapshot)
-            return ProcessResult(snapshot, None, False, [gate.reason])
+            result = ProcessResult(snapshot, None, False, [gate.reason])
+            self._remember_event_result(e.event_id, result)
+            return result
 
         # DATA CORRECTNESS GATE: ambiguous asset identity cannot populate price/MC features.
         if not e.asset_match_verified:
@@ -506,4 +511,6 @@ class RunnerGenesisOmega:
             self.repository.record_rollout(e.token_mint, e.timestamp, mirofish)
             self._persist_new_transitions()
 
-        return ProcessResult(snapshot, fill, risk_approved, risk_reasons)
+        result = ProcessResult(snapshot, fill, risk_approved, risk_reasons)
+        self._remember_event_result(e.event_id, result)
+        return result
