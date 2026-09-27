@@ -236,8 +236,12 @@ class ActorGraphEngine:
             "same_funder_concentration_raw": float(raw_funder),
         }
 
-    def token_cluster_features(self, token_mint: str) -> dict[str, float]:
-        wallets = [e.wallet for e in self.recent_by_token.get(token_mint, []) if e.wallet]
+    def token_cluster_features(self, token_mint: str, as_of: datetime | None = None) -> dict[str, float]:
+        arr = self.recent_by_token.get(token_mint, [])
+        if as_of is not None:
+            cutoff = as_of - self.coevent_window
+            arr[:] = [e for e in arr if cutoff <= e.timestamp <= as_of]
+        wallets = [e.wallet for e in arr if e.wallet]
         unique = list(dict.fromkeys(wallets))
         cohort = self.cohort_features(unique)
         if len(unique) < 2:
