@@ -118,3 +118,13 @@ trader:
 
 point_in_time:
   strict: true
+
+helius_history:
+  enabled: true
+  page_limit: 100
+  max_pages: 5
+  min_funding_sol: 0.01
+
+external_discovery:
+  fomoscan_enabled: false
+  refresh_seconds: 300
