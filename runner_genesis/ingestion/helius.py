@@ -84,14 +84,28 @@ class HeliusOnChainNormalizer(HeliusParsedEventNormalizer):
         sig=payload.get('signature') or payload.get('transactionSignature') or hashlib.sha256(repr(payload).encode()).hexdigest()
         for j,ins in enumerate(payload.get('instructions') or []):
             dec=ins.get('decoded') or {}; name=str(ins.get('instructionName') or dec.get('name') or '').lower()
-            if not any(k in name for k in ('create','initialize')): continue
+            is_migration = any(k in name for k in ('migrate','migration'))
+            is_creation = any(k in name for k in ('create','initialize'))
+            if not (is_creation or is_migration): continue
             mint=None; creator=None
             for a in dec.get('accounts',[]) or []:
                 an=str(a.get('name','')).lower(); pub=a.get('pubkey')
                 if an in ('mint','base_mint','token_mint') and pub: mint=pub
                 if an in ('user','creator','payer','authority') and pub and creator is None: creator=pub
             if mint:
-                out.append(MarketEvent(event_id=hashlib.sha256(f'{sig}|create|{j}|{mint}'.encode()).hexdigest()[:24],timestamp=ts,slot=payload.get('slot'),tx_signature=sig,token_mint=mint,wallet=creator,event_type=EventType.TOKEN_CREATED,source='helius_parsed_events',asset_match_verified=True,metadata={'instruction_name':name,'program':ins.get('programName')}))
+                et = EventType.MIGRATION if is_migration else EventType.TOKEN_CREATED
+                label = 'migration' if is_migration else 'create'
+                program_id = ins.get('programId') or ins.get('program_id') or ins.get('program')
+                out.append(MarketEvent(
+                    event_id=hashlib.sha256(f'{sig}|{label}|{j}|{mint}'.encode()).hexdigest()[:24],
+                    timestamp=ts,slot=payload.get('slot'),tx_signature=sig,token_mint=mint,wallet=creator,
+                    event_type=et,source='helius_parsed_events',asset_match_verified=True,
+                    metadata={
+                        'instruction_name':name,
+                        'program':ins.get('programName'),
+                        'program_id':program_id,
+                    },
+                ))
         summary=payload.get('summary') or {}; parsed=summary.get('parsedData') or summary.get('parsed_data') or {}
         if str(summary.get('type','')).lower()!='swap': return out
         in_mint=parsed.get('input_mint'); out_mint=parsed.get('output_mint')
