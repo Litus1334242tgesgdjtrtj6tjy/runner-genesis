@@ -165,9 +165,23 @@ class SmartCapitalEngine:
     def observe(self, e: MarketEvent) -> None:
         if not self.cfg.enabled or not e.wallet or e.event_type not in BUY_TYPES | SELL_TYPES:
             return
-        p = self._position(e.wallet, e.token_mint)
+
+        key = (e.wallet, e.token_mint)
+        if e.event_type in SELL_TYPES:
+            # A sell with no previously observed/hydrated position is not evidence of a
+            # reduction in the tracked cycle. This matters for truncated history windows.
+            p = self.positions.get(key)
+            if p is None or (p.bought_token <= 0 and p.bought_usd <= 0):
+                return
+        else:
+            p = self._position(e.wallet, e.token_mint)
+
+        if e.event_id and e.event_id in p.event_ids:
+            return
+
         p.last_activity_time = e.timestamp
-        p.event_ids.append(e.event_id)
+        if e.event_id:
+            p.event_ids.append(e.event_id)
         self.wallet_trade_times[e.wallet].append(e.timestamp)
         usd = max(0.0, float(e.usd_value or 0.0))
         token = max(0.0, float(e.amount_token or 0.0))
@@ -204,16 +218,28 @@ class SmartCapitalEngine:
             p.state = "NEW_POSITION" if p.buy_count == 1 else "ADD"
 
         elif e.event_type in SELL_TYPES:
+            remaining_before = max(0.0, p.bought_token - p.sold_token)
+            if token > 0 and remaining_before > 0:
+                matched_fraction = min(token, remaining_before) / token
+            else:
+                matched_fraction = 1.0
             p.sell_count += 1
-            p.sold_usd += usd
-            p.sold_token += token
+            p.sold_usd += usd * matched_fraction
+            if token > 0:
+                p.sold_token += min(token, remaining_before)
             old_state = p.state
             if p.retained_fraction <= 0.02:
                 p.state = "EXIT"
-                if p.first_entry_time is not None:
+                if p.first_entry_time is not None and old_state != "EXIT":
                     self.wallet_closed_holds[e.wallet].append(max(0.0, (e.timestamp - p.first_entry_time).total_seconds()))
             else:
                 p.state = "REDUCE"
+
+    def observe_historical_batch(self, events: list[MarketEvent]) -> None:
+        """Reconstruct wallet positions from historical events without market-state replay."""
+        for event in sorted(events, key=lambda x: (x.timestamp, x.event_id)):
+            self.observe(event)
+
 
     def position_snapshot(self, wallet: str, mint: str, now: datetime) -> dict[str, Any]:
         p = self.positions.get((wallet, mint))
