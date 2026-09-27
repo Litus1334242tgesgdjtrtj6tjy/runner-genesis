@@ -59,3 +59,19 @@ def test_mirofish_skips_low_signal_candidates_even_when_enabled():
     }
     out = m.rollouts('M', t, f)
     assert out['mirofish_status'] == 'NOT_TRIGGERED'
+
+
+def test_fomo_dedupes_provider_callout_id():
+    t = datetime(2026,1,1,tzinfo=timezone.utc)
+    eng = FomoEngine(FomoConfig(enabled=True))
+    row = {
+        'token_mint':'M',
+        'timestamp':t,
+        'source':'FOMOSCAN_PUMP_CALLOUT',
+        'actor_key':'a',
+        'confidence':0.9,
+        'metadata':{'raw_id':'callout-123'},
+    }
+    assert eng.ingest(row) is not None
+    assert eng.ingest(row) is None
+    assert len(eng.recent('M')) == 1
