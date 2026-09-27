@@ -104,3 +104,38 @@ def test_stale_activity_decays_without_erasing_good_onchain_quality():
     )
     assert recent["wallet_discovery_priority_score"] > stale["wallet_discovery_priority_score"]
     assert stale["wallet_discovery_priority_score"] > 0.0
+
+
+
+def test_clan_quality_can_break_otherwise_equal_research_priority():
+    cfg = ExternalDiscoveryConfig(wallet_priority_cohort_weight=0.20)
+    eng = WalletDiscoveryPriorityEngine(cfg)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    row = {
+        "rank": None,
+        "source_confidence": 0.6,
+        "observed_at": now,
+    }
+    metrics = {
+        "smart_capital_30d_score": 0.6,
+        "emerging_smart_wallet_score": 0.6,
+        "data_quality_score": 0.7,
+    }
+    plain = eng.score(
+        {**row, "wallet_address": "PLAIN"},
+        smart_metrics=metrics,
+        discovery_context={},
+        independence_score=0.9,
+        cohort_quality=0.0,
+        now=now,
+    )
+    clan = eng.score(
+        {**row, "wallet_address": "CLAN"},
+        smart_metrics=metrics,
+        discovery_context={},
+        independence_score=0.9,
+        cohort_quality=0.85,
+        now=now,
+    )
+    assert clan["wallet_discovery_priority_score"] > plain["wallet_discovery_priority_score"]
+    assert clan["wallet_discovery_priority_components"]["cohort_quality"] == 0.85
