@@ -133,7 +133,8 @@ class ResearchSyncCoordinator:
         # Helius-only mode can discover candidates organically from live Pump/PumpSwap
         # traffic. These wallets are NOT promoted to top-trader status; they are merely
         # queued for historical qualification so Emerging Smart Wallet can learn them.
-        for wallet, state in self.engine.store.wallets.items():
+        store = getattr(self.engine, "store", None)
+        for wallet, state in (getattr(store, "wallets", {}) or {}).items():
             observed = state.last_seen or state.first_seen or datetime.now(timezone.utc)
             current = latest.get(wallet)
             if current is not None and current.get("observed_at") and current["observed_at"] >= observed:
