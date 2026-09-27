@@ -25,12 +25,13 @@ class ActorGraphEngine:
     fake "clan".
     """
 
-    def __init__(self, coevent_window_seconds: int = 120) -> None:
+    def __init__(self, coevent_window_seconds: int = 120, max_funder_pair_expansion: int = 64) -> None:
         self.graph = nx.Graph()
         self.recent_by_token: dict[str, list[MarketEvent]] = defaultdict(list)
         self.funder_to_wallets: dict[str, set[str]] = defaultdict(set)
         self.wallet_to_funders: dict[str, set[str]] = defaultdict(set)
         self.coevent_window = timedelta(seconds=coevent_window_seconds)
+        self.max_funder_pair_expansion = max(8, int(max_funder_pair_expansion))
 
     @staticmethod
     def _combine(confs) -> float:
@@ -79,12 +80,34 @@ class ActorGraphEngine:
 
     def _refresh_funder_sibling_edges(self, funder: str, ts: datetime) -> None:
         siblings = sorted(self.funder_to_wallets.get(funder, ()))
+        if len(siblings) > self.max_funder_pair_expansion:
+            # High-degree funders are likely services/hubs and an O(n^2) clique would both
+            # waste memory and create misleading actor structure. Only clean previously
+            # expanded edges; concentration is still reported separately.
+            sibling_set = set(siblings)
+            for a, b, data in list(self.graph.edges(data=True)):
+                if a not in sibling_set or b not in sibling_set:
+                    continue
+                evidence = data.get("evidence")
+                if not isinstance(evidence, dict) or "SHARES_FUNDER" not in evidence:
+                    continue
+                common = self.wallet_to_funders.get(a, set()).intersection(self.wallet_to_funders.get(b, set()))
+                eligible = [
+                    x for x in common
+                    if len(self.funder_to_wallets.get(x, ())) <= self.max_funder_pair_expansion
+                ]
+                best = max((self._shared_funder_confidence(x) for x in eligible), default=0.0)
+                self._set_relation_confidence(a, b, "SHARES_FUNDER", best, ts)
+            return
+
         confidence = self._shared_funder_confidence(funder)
         for a, b in combinations(siblings, 2):
-            # If two wallets share several funders, each relationship is still represented
-            # as one SHARES_FUNDER channel; the strongest non-hub evidence dominates.
             common = self.wallet_to_funders.get(a, set()).intersection(self.wallet_to_funders.get(b, set()))
-            best = max((self._shared_funder_confidence(x) for x in common), default=0.0)
+            eligible = [
+                x for x in common
+                if len(self.funder_to_wallets.get(x, ())) <= self.max_funder_pair_expansion
+            ]
+            best = max((self._shared_funder_confidence(x) for x in eligible), default=0.0)
             self._set_relation_confidence(a, b, "SHARES_FUNDER", best or confidence, ts)
 
     def observe(self, e: MarketEvent) -> None:
