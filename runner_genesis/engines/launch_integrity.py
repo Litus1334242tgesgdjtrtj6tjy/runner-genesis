@@ -58,8 +58,23 @@ class LaunchIntegrityEngine:
             data_quality = 0.0
 
         independent_buyers = float(g.get("effective_wallet_count", 0.0) or 0.0)
-        raw_buyers = max(float(len(token.buyers)), 1.0)
-        diversity = _clip(independent_buyers / raw_buyers) if token.buyers else 0.0
+        cohort_raw = float(g.get("raw_wallet_count", 0.0) or 0.0)
+        independence_ratio = g.get("independence_ratio")
+        if independence_ratio is not None and cohort_raw > 0:
+            diversity = _clip(float(independence_ratio))
+        elif cohort_raw > 0:
+            diversity = _clip(independent_buyers / cohort_raw)
+        elif token.buyers:
+            # Only use total buyer count when the graph numerator is measured over the
+            # same population; otherwise Smart-Capital breadth / all buyers is a false
+            # "diversity" penalty for mature tokens.
+            cluster_size = float(g.get("cluster_size", 0.0) or 0.0)
+            diversity = (
+                _clip(independent_buyers / cluster_size)
+                if cluster_size > 0 else 0.0
+            )
+        else:
+            diversity = 0.0
 
         externally_supplied_sellability = token.metadata.get("sellability_score")
         if externally_supplied_sellability is not None:
