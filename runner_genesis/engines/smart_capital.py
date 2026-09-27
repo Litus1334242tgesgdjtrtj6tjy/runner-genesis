@@ -1,210 +1,453 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from collections import defaultdict
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
-import math
-import numpy as np
-from ..domain.events import MarketEvent, EventType
+from math import exp
+from statistics import median
+from typing import Any
+
+from ..domain.events import EventType, MarketEvent
+from ..state_store import MarketStateStore
+from .actor_graph import ActorGraphEngine
 from .wallet_quality import WalletQualityEngine
+from .discovery import PumpDiscoveryEngine
+
+
+BUY_TYPES = {
+    EventType.BUY,
+    EventType.RUNNER_HOLDER_ENTRY,
+    EventType.RUNNER_HOLDER_ADD,
+    EventType.SMART_WALLET_NEW_ENTRY,
+    EventType.SMART_WALLET_ADD,
+}
+SELL_TYPES = {
+    EventType.SELL,
+    EventType.RUNNER_HOLDER_REDUCE,
+    EventType.RUNNER_HOLDER_EXIT,
+    EventType.SMART_WALLET_REDUCE,
+    EventType.SMART_WALLET_EXIT,
+}
+
+
+def _clip(v: float) -> float:
+    return max(0.0, min(1.0, float(v)))
+
 
 @dataclass
 class WalletTokenPosition:
-    wallet: str
+    wallet_address: str
     token_mint: str
     first_entry_time: datetime | None = None
     last_entry_time: datetime | None = None
     last_activity_time: datetime | None = None
-    total_bought_token: float = 0.0
-    total_sold_token: float = 0.0
-    invested_usd: float = 0.0
-    proceeds_usd: float = 0.0
-    current_balance_token: float = 0.0
-    weighted_entry_value: float = 0.0
-    adds: int = 0
-    reductions: int = 0
-    state: str = "UNKNOWN"
+    average_entry_price: float | None = None
+    average_entry_market_cap: float | None = None
+    bought_token: float = 0.0
+    sold_token: float = 0.0
+    bought_usd: float = 0.0
+    sold_usd: float = 0.0
+    invested_sol: float = 0.0
+    buy_count: int = 0
+    sell_count: int = 0
+    estimated_liquid_capital_usd: float | None = None
+    state: str = "NEW_POSITION"
     buy_sizes_usd: list[float] = field(default_factory=list)
-    buy_times: list[datetime] = field(default_factory=list)
+    event_ids: list[str] = field(default_factory=list)
 
     @property
-    def average_entry_price(self) -> float | None:
-        return self.weighted_entry_value / self.total_bought_token if self.total_bought_token > 0 else None
+    def current_exposure_usd(self) -> float:
+        return max(0.0, self.bought_usd - self.sold_usd)
 
-    def apply(self, e: MarketEvent) -> None:
-        self.last_activity_time = e.timestamp
-        if e.event_type in (EventType.BUY, EventType.DEV_BUY, EventType.RUNNER_HOLDER_ENTRY, EventType.RUNNER_HOLDER_ADD):
-            qty = float(e.amount_token or 0.0)
-            usd = float(e.usd_value or 0.0)
-            px = float(e.price_usd or (usd / qty if qty > 0 else 0.0))
-            if self.first_entry_time is None:
-                self.first_entry_time = e.timestamp
-                self.state = "NEW_POSITION"
-            else:
-                self.adds += 1
-                self.state = "ADD"
-            self.last_entry_time = e.timestamp
-            self.total_bought_token += qty
-            self.current_balance_token += qty
-            self.invested_usd += usd
-            self.weighted_entry_value += qty * px
-            self.buy_sizes_usd.append(usd)
-            self.buy_times.append(e.timestamp)
-        elif e.event_type in (EventType.SELL, EventType.DEV_SELL, EventType.RUNNER_HOLDER_REDUCE, EventType.RUNNER_HOLDER_EXIT):
-            qty = max(0.0, float(e.amount_token or 0.0))
-            usd = max(0.0, float(e.usd_value or 0.0))
-            self.total_sold_token += qty
-            self.current_balance_token = max(0.0, self.current_balance_token - qty)
-            self.proceeds_usd += usd
-            self.reductions += 1
-            self.state = "EXIT" if self.current_balance_token <= 1e-12 else "REDUCE"
-        elif self.current_balance_token > 0:
-            self.state = "HOLD"
+    @property
+    def retained_fraction(self) -> float:
+        if self.bought_token > 0:
+            return _clip((self.bought_token - self.sold_token) / self.bought_token)
+        if self.bought_usd > 0:
+            return _clip((self.bought_usd - self.sold_usd) / self.bought_usd)
+        return 0.0
 
-    def held_fraction(self) -> float:
-        return max(0.0, min(1.0, self.current_balance_token / max(self.total_bought_token, 1e-12)))
+    @property
+    def adds(self) -> int:
+        return max(0, self.buy_count - 1)
 
-class PositionReconstructor:
-    def __init__(self) -> None:
-        self.positions: dict[tuple[str, str], WalletTokenPosition] = {}
+    @property
+    def reductions(self) -> int:
+        return self.sell_count
 
-    def observe(self, e: MarketEvent) -> WalletTokenPosition | None:
-        if not e.wallet:
-            return None
-        if e.event_type not in {
-            EventType.BUY, EventType.SELL, EventType.DEV_BUY, EventType.DEV_SELL,
-            EventType.RUNNER_HOLDER_ENTRY, EventType.RUNNER_HOLDER_ADD,
-            EventType.RUNNER_HOLDER_REDUCE, EventType.RUNNER_HOLDER_EXIT,
-        }:
-            return self.positions.get((e.wallet, e.token_mint))
-        key = (e.wallet, e.token_mint)
-        pos = self.positions.setdefault(key, WalletTokenPosition(e.wallet, e.token_mint))
-        pos.apply(e)
-        return pos
 
-    def token_positions(self, mint: str) -> list[WalletTokenPosition]:
-        return [p for (_, m), p in self.positions.items() if m == mint]
+@dataclass
+class SmartStateTransition:
+    timestamp: datetime
+    token_mint: str
+    old_state: str
+    new_state: str
+    reason: str
+    metrics_snapshot: dict[str, float | str | None]
 
-class WalletStyleClassifier:
-    def classify(self, positions: list[WalletTokenPosition], as_of: datetime) -> tuple[str, float, float, float]:
-        if not positions:
-            return "UNKNOWN", 0.0, 0.0, 0.0
-        holds = []
-        retained = []
-        for p in positions:
-            if p.first_entry_time:
-                end = p.last_activity_time or as_of
-                holds.append(max(0.0, (end - p.first_entry_time).total_seconds()))
-            retained.append(p.held_fraction())
-        med_hold = float(np.median(holds)) if holds else 0.0
-        med_ret = float(np.median(retained)) if retained else 0.0
-        swing = max(0.0, min(1.0, med_hold / (6 * 3600))) * (0.4 + 0.6 * med_ret)
-        hold = max(0.0, min(1.0, med_hold / (24 * 3600))) * (0.5 + 0.5 * med_ret)
-        if med_hold < 300 and med_ret < 0.35:
-            style = "SCALPER"
-        elif hold >= 0.55:
-            style = "HOLDER"
-        elif swing >= 0.45:
-            style = "SWING"
-        elif med_ret >= 0.5:
-            style = "RUNNER"
-        else:
-            style = "MIXED"
-        return style, swing, hold, med_hold
 
 class SmartCapitalEngine:
-    def __init__(self, wallet_quality: WalletQualityEngine, actor_graph, cfg: dict | None = None) -> None:
+    """Point-in-time wallet-position and weighted-consensus engine.
+
+    It deliberately separates discovery from qualification: a Pump/KOL source may explain
+    where a wallet was found, but on-chain quality/strategy/conviction/independence decide
+    whether that wallet contributes meaningful weight.
+    """
+
+    def __init__(self, cfg, wallet_quality: WalletQualityEngine, discovery: PumpDiscoveryEngine) -> None:
+        self.cfg = cfg
         self.wallet_quality = wallet_quality
-        self.actor_graph = actor_graph
-        self.cfg = cfg or {}
-        self.positions = PositionReconstructor()
-        self.style = WalletStyleClassifier()
-        self.token_states: dict[str, dict] = {}
+        self.discovery = discovery
+        self.positions: dict[tuple[str, str], WalletTokenPosition] = {}
+        self.wallet_trade_times: dict[str, list[datetime]] = defaultdict(list)
+        self.wallet_closed_holds: dict[str, list[float]] = defaultdict(list)
+        self.token_state: dict[str, str] = defaultdict(lambda: "OBSERVATION")
+        self.transitions: list[SmartStateTransition] = []
+
+    def _position(self, wallet: str, mint: str) -> WalletTokenPosition:
+        key = (wallet, mint)
+        if key not in self.positions:
+            self.positions[key] = WalletTokenPosition(wallet_address=wallet, token_mint=mint)
+        return self.positions[key]
+
+    def observe(self, e: MarketEvent) -> None:
+        if not self.cfg.enabled or not e.wallet or e.event_type not in BUY_TYPES | SELL_TYPES:
+            return
+        p = self._position(e.wallet, e.token_mint)
+        p.last_activity_time = e.timestamp
+        p.event_ids.append(e.event_id)
+        self.wallet_trade_times[e.wallet].append(e.timestamp)
+        usd = max(0.0, float(e.usd_value or 0.0))
+        token = max(0.0, float(e.amount_token or 0.0))
+        sol = max(0.0, float(e.sol_value or 0.0))
+
+        cap = e.metadata.get("estimated_liquid_capital_usd") if e.metadata else None
+        if cap is not None:
+            try:
+                p.estimated_liquid_capital_usd = max(0.0, float(cap))
+            except (TypeError, ValueError):
+                pass
+
+        if e.event_type in BUY_TYPES:
+            if p.first_entry_time is None:
+                p.first_entry_time = e.timestamp
+            p.last_entry_time = e.timestamp
+            old_bought_usd = p.bought_usd
+            p.buy_count += 1
+            p.bought_usd += usd
+            p.bought_token += token
+            p.invested_sol += sol
+            if usd > 0:
+                p.buy_sizes_usd.append(usd)
+            if e.price_usd is not None and e.price_usd > 0:
+                if old_bought_usd > 0 and p.average_entry_price is not None and usd > 0:
+                    p.average_entry_price = (p.average_entry_price * old_bought_usd + float(e.price_usd) * usd) / (old_bought_usd + usd)
+                elif p.average_entry_price is None:
+                    p.average_entry_price = float(e.price_usd)
+            if e.market_cap_usd is not None and e.market_cap_usd > 0:
+                if old_bought_usd > 0 and p.average_entry_market_cap is not None and usd > 0:
+                    p.average_entry_market_cap = (p.average_entry_market_cap * old_bought_usd + float(e.market_cap_usd) * usd) / (old_bought_usd + usd)
+                elif p.average_entry_market_cap is None:
+                    p.average_entry_market_cap = float(e.market_cap_usd)
+            p.state = "NEW_POSITION" if p.buy_count == 1 else "ADD"
+
+        elif e.event_type in SELL_TYPES:
+            p.sell_count += 1
+            p.sold_usd += usd
+            p.sold_token += token
+            old_state = p.state
+            if p.retained_fraction <= 0.02:
+                p.state = "EXIT"
+                if p.first_entry_time is not None:
+                    self.wallet_closed_holds[e.wallet].append(max(0.0, (e.timestamp - p.first_entry_time).total_seconds()))
+            else:
+                p.state = "REDUCE"
+
+    def position_snapshot(self, wallet: str, mint: str, now: datetime) -> dict[str, Any]:
+        p = self.positions.get((wallet, mint))
+        if not p:
+            return {}
+        hold = max(0.0, (now - p.first_entry_time).total_seconds()) if p.first_entry_time else 0.0
+        return {
+            **asdict(p),
+            "current_exposure_usd": p.current_exposure_usd,
+            "retained_fraction": p.retained_fraction,
+            "hold_time_seconds": hold,
+            "adds": p.adds,
+            "reductions": p.reductions,
+        }
+
+    def wallet_style(self, wallet: str, now: datetime) -> str:
+        holds = list(self.wallet_closed_holds.get(wallet, []))
+        active_holds = [
+            max(0.0, (now - p.first_entry_time).total_seconds())
+            for (w, _), p in self.positions.items()
+            if w == wallet and p.first_entry_time and p.retained_fraction > 0.02
+        ]
+        sample = holds + active_holds
+        if not sample:
+            return "UNKNOWN"
+        med = median(sample)
+        trade_count = len(self.wallet_trade_times.get(wallet, []))
+        if med < 300 and trade_count >= 4:
+            return "SCALPER"
+        if med >= 6 * 3600:
+            return "HOLDER"
+        if med >= 45 * 60:
+            return "SWING"
+        if med >= 10 * 60:
+            return "RUNNER"
+        return "MIXED"
 
     @staticmethod
-    def _conviction(pos: WalletTokenPosition) -> tuple[float, float]:
-        if not pos.buy_sizes_usd:
+    def strategy_match(style: str) -> float:
+        return {
+            "HOLDER": 1.0,
+            "SWING": 0.95,
+            "RUNNER": 0.90,
+            "MIXED": 0.65,
+            "UNKNOWN": 0.50,
+            "SCALPER": 0.35,
+        }.get(style, 0.50)
+
+    def conviction(self, p: WalletTokenPosition, store: MarketStateStore) -> tuple[float, float]:
+        w = store.wallets.get(p.wallet_address)
+        history = [float(x[1]) for x in (w.buys if w else []) if float(x[1] or 0) > 0]
+        last_size = p.buy_sizes_usd[-1] if p.buy_sizes_usd else 0.0
+        vs_median = None
+        score_parts = []
+        confidence_parts = []
+        if history and last_size > 0:
+            med = median(history)
+            if med > 0:
+                vs_median = last_size / med
+                score_parts.append(_clip(vs_median / 2.0))
+                confidence_parts.append(min(1.0, len(history) / 10.0))
+        if p.estimated_liquid_capital_usd and p.estimated_liquid_capital_usd > 0 and p.current_exposure_usd > 0:
+            relative = p.current_exposure_usd / p.estimated_liquid_capital_usd
+            score_parts.append(_clip(relative / 0.10))
+            confidence_parts.append(1.0)
+        if not score_parts:
             return 0.0, 0.0
-        current = pos.buy_sizes_usd[-1]
-        median = float(np.median(pos.buy_sizes_usd)) or current or 1.0
-        size_ratio = current / max(median, 1e-9)
-        score = max(0.0, min(1.0, 0.5 + 0.25 * math.tanh(size_ratio - 1.0)))
-        confidence = min(1.0, len(pos.buy_sizes_usd) / 4.0)
-        return score, confidence
+        return sum(score_parts) / len(score_parts), sum(confidence_parts) / len(confidence_parts)
 
-    @staticmethod
-    def _accumulation(pos: WalletTokenPosition) -> float:
-        if pos.total_bought_token <= 0:
+    def accumulation(self, p: WalletTokenPosition, now: datetime) -> float:
+        if p.buy_count <= 0:
             return 0.0
-        add_component = min(1.0, pos.adds / 3.0)
-        retention = pos.held_fraction()
+        add_score = _clip(p.adds / 3.0)
+        retention = p.retained_fraction
+        hold = max(0.0, (now - p.first_entry_time).total_seconds()) if p.first_entry_time else 0.0
+        hold_score = _clip(hold / 3600.0)
         progression = 0.5
-        if len(pos.buy_sizes_usd) >= 2:
-            progression = 1.0 if pos.buy_sizes_usd[-1] >= pos.buy_sizes_usd[0] else 0.25
-        reduction_penalty = min(1.0, pos.reductions / 2.0)
-        return max(0.0, min(1.0, 0.35 * add_component + 0.45 * retention + 0.20 * progression - 0.35 * reduction_penalty))
+        if len(p.buy_sizes_usd) >= 2 and p.buy_sizes_usd[0] > 0:
+            progression = _clip((p.buy_sizes_usd[-1] / p.buy_sizes_usd[0]) / 1.5)
+        return _clip(0.30 * add_score + 0.35 * retention + 0.20 * hold_score + 0.15 * progression)
 
-    def observe_and_features(self, e: MarketEvent, store) -> dict[str, float | str | None]:
-        self.positions.observe(e)
-        positions = self.positions.token_positions(e.token_mint)
-        contributions = []; accumulations = []; convictions = []; qualities = []; swings = []; holds = []; qualified_wallets = []
-        total_capital = 0.0
-        for p in positions:
-            q = self.wallet_quality.compute(p.wallet, e.timestamp, store)
-            wallet_positions = [x for (w, _), x in self.positions.positions.items() if w == p.wallet]
-            style, swing, hold, _ = self.style.classify(wallet_positions, e.timestamp)
-            conviction, _ = self._conviction(p)
-            accumulation = self._accumulation(p)
-            freshness = 1.0
-            if p.last_activity_time:
-                age = max(0.0, (e.timestamp - p.last_activity_time).total_seconds())
-                freshness = math.exp(-age / max(float(self.cfg.get("freshness_half_life_seconds", 3600.0)), 1.0))
-            strategy_match = max(swing, hold, 0.25 if style == "RUNNER" else 0.0)
-            quality = float(q.quality)
-            contribution = quality * max(strategy_match, 0.15) * max(conviction, 0.25) * freshness
-            if p.current_balance_token > 0:
-                qualified_wallets.append(p.wallet); contributions.append(contribution); accumulations.append(accumulation); convictions.append(conviction); qualities.append(quality); swings.append(swing); holds.append(hold)
-                total_capital += max(0.0, p.invested_usd - p.proceeds_usd)
+    def wallet_metrics(self, wallet: str, as_of: datetime, store: MarketStateStore) -> dict[str, Any]:
+        q = self.wallet_quality.compute(wallet, as_of, store)
+        hist = store.resolved_wallet_history_as_of(wallet, as_of)
+        returns = [float(x.realized_return) for x in hist if x.realized_return is not None]
+        wins = [x for x in returns if x > 0]
+        losses = [x for x in returns if x < 0]
+        total_gain = sum(wins)
+        total_loss = abs(sum(losses))
+        profit_factor = (total_gain / total_loss) if total_loss > 0 else None
+        sorted_pnl = sorted((max(0.0, x) for x in returns), reverse=True)
+        total_positive = sum(sorted_pnl)
+        def share(k: int) -> float | None:
+            if total_positive <= 0:
+                return None
+            return sum(sorted_pnl[:k]) / total_positive
+        consistency = None
+        if returns:
+            mean = sum(returns) / len(returns)
+            variance = sum((x - mean) ** 2 for x in returns) / len(returns)
+            consistency = _clip(0.5 + 0.25 * mean - 0.25 * (variance ** 0.5))
+        discovery = self.discovery.wallet_context(wallet, as_of)
+        return {
+            "wallet_address": wallet,
+            "sample_size": len(hist),
+            "win_rate": (sum(x > 0 for x in returns) / len(returns)) if returns else None,
+            "profit_factor": profit_factor,
+            "median_roi": median(returns) if returns else None,
+            "average_roi": (sum(returns) / len(returns)) if returns else None,
+            "largest_win": max(returns) if returns else None,
+            "largest_loss": min(returns) if returns else None,
+            "loss_rate": (sum(x < 0 for x in returns) / len(returns)) if returns else None,
+            "top1_pnl_share": share(1),
+            "top3_pnl_share": share(3),
+            "top5_pnl_share": share(5),
+            "consistency_score": consistency,
+            "repeatability_score": q.runner_hit_rate if hist else None,
+            "diversification_score": None,
+            "wallet_quality_score": q.quality,
+            "runner_score": q.runner_hit_rate,
+            "hold_score": _clip(q.median_winner_hold_seconds / (6 * 3600)) if q.sample_size else 0.0,
+            "swing_score": _clip(q.median_winner_hold_seconds / (2 * 3600)) if q.sample_size else 0.0,
+            "wallet_style": self.wallet_style(wallet, as_of),
+            "confidence": min(1.0, q.sample_size / max(float(self.cfg.quality_sample_target), 1.0)),
+            **discovery,
+        }
 
-        eff = self.actor_graph.effective_wallet_count(qualified_wallets)
-        raw = len(set(qualified_wallets))
-        independence = eff / raw if raw else 0.0
-        base = float(np.mean(contributions)) if contributions else 0.0
-        breadth = min(1.0, eff / max(float(self.cfg.get("target_effective_wallets", 3.0)), 1.0))
-        consensus = max(0.0, min(1.0, base * 0.65 + breadth * 0.35))
-        accumulation = float(np.mean(accumulations)) if accumulations else 0.0
-        conviction = float(np.mean(convictions)) if convictions else 0.0
-        quality = float(np.mean(qualities)) if qualities else 0.0
-        swing = float(np.mean(swings)) if swings else 0.0
-        hold = float(np.mean(holds)) if holds else 0.0
+    def token_features(self, mint: str, now: datetime, store: MarketStateStore, actor: ActorGraphEngine) -> dict[str, float | str | None]:
+        active = [p for (w, m), p in self.positions.items() if m == mint and p.retained_fraction > 0.02]
+        wallets = [p.wallet_address for p in active]
+        cohort = actor.cohort_features(wallets)
+        eff = float(cohort["effective_wallet_count"])
 
-        state = "OBSERVATION"
-        if consensus >= 0.72 and accumulation >= 0.55 and eff >= 2.0:
-            state = "CONFIRMED"
-        elif accumulation >= 0.45 and eff >= 1.5:
-            state = "ACCUMULATION"
-        elif positions and all(p.state == "EXIT" for p in positions):
-            state = "EXIT"
+        contributions = []
+        capitals = []
+        qualities = []
+        swings = []
+        holds = []
+        accumulations = []
+        convictions = []
+        price_num = price_den = 0.0
+        mc_num = mc_den = 0.0
 
-        entry_prices=[p.average_entry_price for p in positions if p.current_balance_token>0 and p.average_entry_price]
-        smart_avg_entry=float(np.mean(entry_prices)) if entry_prices else None
-        current_price=float(store.token(e.token_mint).price_usd or 0.0)
-        entry_distance=((current_price/smart_avg_entry)-1.0) if (smart_avg_entry and current_price>0) else None
-        result = {
-            "smart_money_consensus": consensus,
-            "weighted_smart_capital_consensus": consensus,
+        for p in active:
+            q = self.wallet_quality.compute(p.wallet_address, now, store)
+            style = self.wallet_style(p.wallet_address, now)
+            strategy = self.strategy_match(style)
+            conviction, conviction_conf = self.conviction(p, store)
+            accum = self.accumulation(p, now)
+            age = max(0.0, (now - (p.last_activity_time or now)).total_seconds())
+            event_freshness = exp(-age / max(float(self.cfg.freshness_half_life_seconds), 1.0))
+            # Continuing to hold most of a position is itself fresh state evidence for a
+            # swing/persistence strategy; do not decay an intact holder to zero merely
+            # because it has not generated a new transaction in the last few minutes.
+            freshness = max(event_freshness, 0.65 * p.retained_fraction)
+            independence = actor.independence_factor(p.wallet_address, wallets)
+            contribution = q.quality * strategy * max(conviction, 0.15) * freshness * independence
+            contributions.append(contribution)
+            capital = max(p.current_exposure_usd, 1.0)
+            capitals.append(capital)
+            qualities.append(q.quality)
+            swings.append(1.0 if style == "SWING" else 0.75 if style in {"HOLDER", "RUNNER"} else 0.25)
+            holds.append(_clip(q.median_winner_hold_seconds / (6 * 3600)) if q.sample_size else (0.8 if style == "HOLDER" else 0.5 if style == "SWING" else 0.2))
+            accumulations.append(accum)
+            convictions.append(conviction)
+            if p.average_entry_price is not None:
+                price_num += p.average_entry_price * capital
+                price_den += capital
+            if p.average_entry_market_cap is not None:
+                mc_num += p.average_entry_market_cap * capital
+                mc_den += capital
+
+        raw = len(active)
+        mean_contribution = sum(contributions) / max(raw, 1)
+        breadth = _clip(eff / 3.0)
+        consensus = _clip(0.72 * mean_contribution + 0.28 * breadth)
+        accumulation = sum(accumulations) / max(len(accumulations), 1)
+        conviction = sum(convictions) / max(len(convictions), 1)
+        avg_quality = sum(qualities) / max(len(qualities), 1)
+        avg_swing = sum(swings) / max(len(swings), 1)
+        avg_hold = sum(holds) / max(len(holds), 1)
+        smart_entry_price = price_num / price_den if price_den else None
+        smart_entry_mc = mc_num / mc_den if mc_den else None
+        token = store.token(mint)
+        entry_distance_price = (token.price_usd / smart_entry_price - 1.0) if token.price_usd and smart_entry_price else None
+        entry_distance_mc = (token.market_cap_usd / smart_entry_mc - 1.0) if token.market_cap_usd and smart_entry_mc else None
+
+        retained = [p.retained_fraction for p in active]
+        weighted_retention = sum(r * c for r, c in zip(retained, capitals)) / max(sum(capitals), 1e-9) if active else 0.0
+        distribution = _clip(1.0 - weighted_retention) if active else 0.0
+
+        known = [
+            1.0 if token.price_usd is not None else 0.0,
+            1.0 if token.market_cap_usd is not None else 0.0,
+            1.0 if token.liquidity_usd is not None else 0.0,
+            1.0 if raw > 0 else 0.0,
+            min(1.0, avg_quality / 0.5) if raw else 0.0,
+        ]
+        data_quality = sum(known) / len(known)
+
+        signal_valid = consensus >= float(self.cfg.min_consensus) and eff >= float(self.cfg.min_effective_wallets) and accumulation >= float(self.cfg.min_accumulation)
+        if entry_distance_price is None:
+            entry_validity = "WAITING_DATA"
+        elif entry_distance_price > float(self.cfg.max_entry_distance_price):
+            entry_validity = "ENTRY_TOO_LATE"
+        elif signal_valid:
+            entry_validity = "VALID"
+        else:
+            entry_validity = "NOT_CONFIRMED"
+
+        current = self.token_state[mint]
+        if raw == 0:
+            new_state = "OBSERVATION"
+            reason = "NO_ACTIVE_SMART_POSITIONS"
+        elif distribution >= float(self.cfg.distribution_exit_threshold):
+            new_state = "DISTRIBUTION"
+            reason = "DISTRIBUTION_HIGH"
+        elif signal_valid:
+            new_state = "CONFIRMED"
+            reason = "WEIGHTED_CONSENSUS_CONFIRMED"
+        elif accumulation >= float(self.cfg.min_accumulation):
+            new_state = "ACCUMULATION"
+            reason = "ACCUMULATION_FORMING"
+        else:
+            new_state = "OBSERVATION"
+            reason = "INSUFFICIENT_CONSENSUS"
+        self._transition(mint, now, current, new_state, reason, {
+            "consensus": consensus,
+            "accumulation": accumulation,
+            "distribution": distribution,
+            "effective_wallet_count": eff,
+        })
+
+        return {
             "qualified_wallet_count": float(raw),
-            "effective_wallet_count": float(eff),
-            "independence_factor": independence,
-            "smart_capital_usd": total_capital,
+            **cohort,
+            "total_smart_capital_usd": float(sum(p.current_exposure_usd for p in active)),
+            "weighted_smart_capital_consensus": consensus,
+            "smart_money_consensus": consensus,
             "accumulation_score": accumulation,
             "conviction_score": conviction,
-            "average_wallet_quality": quality,
-            "average_swing_score": swing,
-            "average_hold_score": hold,
-            "smart_capital_state": state,
-            "smart_average_entry_price": smart_avg_entry,
-            "entry_distance_price": entry_distance,
-            "entry_validity": "ENTRY_TOO_LATE" if entry_distance is not None and entry_distance > float(self.cfg.get("max_entry_distance",0.60)) else "VALID",
-            "smart_capital_confidence": min(1.0, 0.25 * raw + 0.35 * breadth + 0.40 * quality),
+            "average_wallet_quality": avg_quality,
+            "average_swing_score": avg_swing,
+            "average_hold_score": avg_hold,
+            "smart_average_entry_price": smart_entry_price,
+            "smart_average_entry_market_cap": smart_entry_mc,
+            "entry_distance_price": entry_distance_price,
+            "entry_distance_market_cap": entry_distance_mc,
+            "smart_capital_retention": weighted_retention,
+            "smart_distribution_score": distribution,
+            "smart_capital_state": self.token_state[mint],
+            "signal_validity": "VALID" if signal_valid else "NOT_CONFIRMED",
+            "entry_validity": entry_validity,
+            "data_quality_score": data_quality,
         }
-        self.token_states[e.token_mint] = result
-        return result
+
+    def apply_persistence(self, mint: str, now: datetime, persistence: float, distribution: float, feature_snapshot: dict[str, Any]) -> str:
+        current = self.token_state[mint]
+        if distribution >= float(self.cfg.distribution_exit_threshold):
+            new = "EXIT"
+            reason = "STRONG_DISTRIBUTION"
+        elif distribution >= float(self.cfg.distribution_protect_threshold):
+            new = "PROTECT"
+            reason = "DISTRIBUTION_RISING"
+        elif persistence >= float(self.cfg.state_persistence_threshold) and current in {"CONFIRMED", "ACCUMULATION", "PERSISTENCE"}:
+            new = "PERSISTENCE"
+            reason = "PERSISTENCE_CONFIRMED"
+        else:
+            new = current
+            reason = "STATE_MAINTAINED"
+        self._transition(mint, now, current, new, reason, {
+            "persistence": persistence,
+            "distribution": distribution,
+            "consensus": feature_snapshot.get("weighted_smart_capital_consensus"),
+        })
+        return self.token_state[mint]
+
+    def _transition(self, mint: str, now: datetime, old: str, new: str, reason: str, metrics: dict[str, Any]) -> None:
+        if old == new:
+            return
+        self.token_state[mint] = new
+        self.transitions.append(SmartStateTransition(now, mint, old, new, reason, dict(metrics)))
+
+    def active_token_rows(self, now: datetime, store: MarketStateStore, actor: ActorGraphEngine) -> list[dict[str, Any]]:
+        mints = sorted({m for _, m in self.positions})
+        rows = []
+        for mint in mints:
+            f = self.token_features(mint, now, store, actor)
+            rows.append({"token": mint, **f})
+        return rows

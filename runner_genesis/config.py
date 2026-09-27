@@ -1,0 +1,161 @@
+from __future__ import annotations
+import os
+from pathlib import Path
+from typing import Any
+import yaml
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+
+class RiskConfig(BaseModel):
+    max_position_eur: float = 25.0
+    max_account_pct_per_trade: float = 0.08
+    max_simultaneous_positions: int = 4
+    max_daily_loss_eur: float = 30.0
+    max_portfolio_drawdown_pct: float = 0.20
+    max_daily_spend_eur: float = 120.0
+    max_slippage_pct: float = 0.12
+    min_liquidity_usd: float = 10_000.0
+    max_dev_holdings_pct: float = 0.12
+    max_sniper_pct: float = 0.30
+    max_bundle_pct: float = 0.30
+    max_suspected_related_concentration_pct: float = 0.35
+    max_correlated_exposure_pct: float = 0.35
+    min_sellability_score: float = 0.25
+    max_manipulation_risk: float = 0.78
+    kill_switch: bool = False
+
+
+class ExecutionConfig(BaseModel):
+    latency_ms_mean: float = 1100.0
+    latency_ms_std: float = 250.0
+    execution_delay_seconds: float = 60.0
+    base_fee_bps: float = 35.0
+    priority_fee_bps: float = 10.0
+    mev_adverse_bps: float = 20.0
+    base_slippage_bps: float = 35.0
+    impact_coefficient: float = 1.25
+    max_liquidity_fraction: float = 0.02
+    failed_tx_base_probability: float = 0.015
+    partial_fill_enabled: bool = True
+
+
+class TraderConfig(BaseModel):
+    min_genesis_to_watch: float = 0.55
+    min_entry_edge: float = 0.025
+    min_hold_score: float = 0.52
+    reduce_below_hold_score: float = 0.42
+    exit_below_hold_score: float = 0.28
+    moonbag_fraction: float = 0.15
+    max_adds_per_position: int = 2
+    default_position_eur: float = 10.0
+    require_trained_for_entry: bool = True
+
+
+class SmartCapitalConfig(BaseModel):
+    enabled: bool = True
+    min_wallet_quality: float = 0.20
+    min_strategy_match: float = 0.35
+    min_effective_wallets: float = 1.25
+    min_consensus: float = 0.55
+    min_accumulation: float = 0.45
+    min_conviction: float = 0.35
+    max_entry_distance_price: float = 1.50
+    freshness_half_life_seconds: float = 900.0
+    quality_sample_target: int = 30
+    state_confirm_threshold: float = 0.62
+    state_persistence_threshold: float = 0.68
+    distribution_protect_threshold: float = 0.58
+    distribution_exit_threshold: float = 0.76
+
+
+class FomoConfig(BaseModel):
+    enabled: bool = False
+    minimum_source_confidence: float = 0.35
+    maximum_source_age_seconds: float = 900.0
+    window_seconds: float = 300.0
+
+
+class MiroFishConfig(BaseModel):
+    enabled: bool = False
+    num_rollouts: int = 128
+    horizon_seconds: int = 900
+    random_seed: int = 20260927
+    max_agents: int = 64
+    rollout_timeout_ms: int = 250
+    use_world_model_prior: bool = True
+    require_min_data_quality: float = 0.45
+
+
+class PumpDiscoveryConfig(BaseModel):
+    enabled: bool = True
+    top_traders_enabled: bool = True
+    kol_enabled: bool = True
+    cohort_enabled: bool = True
+    max_snapshot_age_seconds: float = 3600.0
+
+
+class PersistenceConfig(BaseModel):
+    enabled: bool = True
+
+
+class Settings(BaseModel):
+    mode: str = "PAPER"
+    live_trading: bool = False
+    paper_starting_capital_eur: float = 300.0
+    currency: str = "EUR"
+    features: dict[str, Any] = Field(default_factory=dict)
+    risk: RiskConfig = Field(default_factory=RiskConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    trader: TraderConfig = Field(default_factory=TraderConfig)
+    smart_capital: SmartCapitalConfig = Field(default_factory=SmartCapitalConfig)
+    fomo: FomoConfig = Field(default_factory=FomoConfig)
+    mirofish: MiroFishConfig = Field(default_factory=MiroFishConfig)
+    pump_discovery: PumpDiscoveryConfig = Field(default_factory=PumpDiscoveryConfig)
+    persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
+    point_in_time: dict[str, Any] = Field(default_factory=lambda: {"strict": True})
+    database_url: str = "sqlite:///./runner_genesis.db"
+    solana_rpc_http: str = "https://api.mainnet-beta.solana.com"
+    solana_rpc_ws: str = "wss://api.mainnet-beta.solana.com"
+    helius_api_key: str | None = None
+
+    @property
+    def paper_only(self) -> bool:
+        return not self.live_trading or self.mode.upper() != "LIVE"
+
+
+def _deep_update(dst: dict, src: dict) -> dict:
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _deep_update(dst[k], v)
+        else:
+            dst[k] = v
+    return dst
+
+
+def load_settings(path: str | Path | None = None) -> Settings:
+    load_dotenv(dotenv_path=Path(".env"), override=False)
+    cfg_path = Path(path or os.getenv("RUNNER_CONFIG", "config/default.yaml"))
+    data: dict[str, Any] = {}
+    if cfg_path.exists():
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    env_overlay: dict[str, Any] = {}
+    if os.getenv("RUNNER_MODE"):
+        env_overlay["mode"] = os.environ["RUNNER_MODE"]
+    if os.getenv("DATABASE_URL"):
+        env_overlay["database_url"] = os.environ["DATABASE_URL"]
+    if os.getenv("SOLANA_RPC_HTTP"):
+        env_overlay["solana_rpc_http"] = os.environ["SOLANA_RPC_HTTP"]
+    if os.getenv("SOLANA_RPC_WS"):
+        env_overlay["solana_rpc_ws"] = os.environ["SOLANA_RPC_WS"]
+    if os.getenv("HELIUS_API_KEY"):
+        env_overlay["helius_api_key"] = os.environ["HELIUS_API_KEY"]
+    if os.getenv("LIVE_TRADING") is not None:
+        env_overlay["live_trading"] = os.getenv("LIVE_TRADING", "false").lower() == "true"
+    if os.getenv("PAPER_STARTING_CAPITAL_EUR"):
+        env_overlay["paper_starting_capital_eur"] = float(os.environ["PAPER_STARTING_CAPITAL_EUR"])
+    _deep_update(data, env_overlay)
+    settings = Settings.model_validate(data)
+    if settings.live_trading and settings.mode.upper() != "LIVE":
+        raise ValueError("LIVE_TRADING=true requires mode=LIVE explicitly")
+    return settings

@@ -1,60 +1,110 @@
 from __future__ import annotations
+from datetime import datetime
 import hashlib
+import math
+import time
 import numpy as np
 
-class MiroFishFutureRolloutEngine:
-    """Experimental role-based stochastic rollout engine.
 
+class MiroFishRolloutEngine:
+    """Local MiroFish-style multi-agent scenario simulator.
+
+    This is deliberately an experimental, self-contained stochastic simulator. It does
+    not claim to know the future and does not call an external MiroFish service.
     Outputs are simulation frequencies, not calibrated probabilities.
-    It uses only the supplied point-in-time feature state.
     """
-    def __init__(self, enabled: bool = False, num_rollouts: int = 128, horizon_seconds: int = 3600, seed: int = 20260927) -> None:
-        self.enabled = enabled
-        self.num_rollouts = max(8, int(num_rollouts))
-        self.horizon_seconds = max(60, int(horizon_seconds))
-        self.seed = int(seed)
 
-    def _rng(self, mint: str, decision_key: str):
-        h = hashlib.sha256(f"{self.seed}|{mint}|{decision_key}".encode()).digest()
-        return np.random.default_rng(int.from_bytes(h[:8], "little"))
+    def __init__(self, cfg) -> None:
+        self.cfg = cfg
 
-    def rollouts(self, mint: str, decision_key: str, f: dict) -> dict[str, float | str | bool]:
-        if not self.enabled:
-            return {"mirofish_enabled": False, "mirofish_status": "DISABLED"}
-        quality = float(f.get("average_wallet_quality", f.get("wallet_quality", 0.0)) or 0.0)
+    def _rng(self, mint: str, decision_time: datetime) -> np.random.Generator:
+        key = f"{self.cfg.random_seed}|{mint}|{decision_time.isoformat()}"
+        seed = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "little")
+        return np.random.default_rng(seed)
+
+    def rollouts(self, mint: str, decision_time: datetime, f: dict) -> dict[str, float | str]:
+        if not self.cfg.enabled:
+            return {"mirofish_status": "DISABLED"}
+        dq = float(f.get("data_quality_score", 0.0) or 0.0)
+        if dq < float(self.cfg.require_min_data_quality):
+            return {"mirofish_status": "WAITING_DATA", "mirofish_data_quality": dq}
+
+        rng = self._rng(mint, decision_time)
+        n = max(8, int(self.cfg.num_rollouts))
+        steps = max(3, min(30, int(self.cfg.horizon_seconds // 30) or 3))
+        deadline = time.perf_counter() + max(float(self.cfg.rollout_timeout_ms), 1.0) / 1000.0
+
         consensus = float(f.get("weighted_smart_capital_consensus", f.get("smart_money_consensus", 0.0)) or 0.0)
-        accumulation = float(f.get("accumulation_score", 0.0) or 0.0)
+        accum = float(f.get("accumulation_score", 0.0) or 0.0)
         persistence = float(f.get("runner_persistence", 0.0) or 0.0)
+        market = max(-1.0, min(1.0, float(f.get("net_buy_pressure_60s", 0.0) or 0.0)))
         integrity = float(f.get("launch_integrity_score", 0.5) or 0.5)
-        dump_risk = float(f.get("coordinated_dump_risk", 0.0) or 0.0)
-        accel = float(f.get("buyer_acceleration", 0.0) or 0.0)
-        liq = float(f.get("liquidity_usd", 0.0) or 0.0)
-        data_q = float(f.get("feature_completeness_score", 0.5) or 0.5)
-        rng = self._rng(mint, decision_key)
-        outcomes = {"wave":0, "persist":0, "distribute":0, "collapse":0, "new_elite":0}
-        returns=[]
-        for _ in range(self.num_rollouts):
-            noise = rng.normal(0, 0.18)
-            strength = 0.24*consensus + 0.18*accumulation + 0.16*quality + 0.16*persistence + 0.12*integrity + 0.06*max(0.0, accel) + 0.08*min(1.0, liq/50_000.0) + noise
-            hazard = 0.55*dump_risk + 0.25*(1-integrity) + 0.20*max(0.0, -accel) + rng.normal(0,0.12)
-            wave = strength > 0.58
-            persist = strength > 0.50 and hazard < 0.55
-            distribute = hazard > 0.52
-            collapse = hazard > 0.72 and strength < 0.55
-            elite = consensus > 0.45 and accumulation > 0.40 and rng.random() < min(0.8, 0.15 + 0.5*consensus)
-            outcomes["wave"] += int(wave); outcomes["persist"] += int(persist); outcomes["distribute"] += int(distribute); outcomes["collapse"] += int(collapse); outcomes["new_elite"] += int(elite)
-            returns.append(max(-1.0, min(3.0, 1.4*strength - 1.2*hazard + rng.normal(0,0.25))))
-        n=float(self.num_rollouts)
+        dump = float(f.get("coordinated_dump_risk", 0.0) or 0.0)
+        fomo = float(f.get("fomo_score", 0.0) or 0.0)
+        world_prior = float(f.get("world_smart_wave_score", 0.0) or 0.0) if self.cfg.use_world_model_prior else 0.0
+
+        persist_hits = 0
+        distribution_hits = 0
+        collapse_hits = 0
+        elite_hits = 0
+        cohort_hits = 0
+        returns: list[float] = []
+        actual = 0
+
+        for _ in range(n):
+            if time.perf_counter() > deadline and actual >= 8:
+                break
+            actual += 1
+            capital = 0.55 * consensus + 0.35 * accum + 0.10 * world_prior
+            holder = persistence
+            liquidity = 0.45 + 0.45 * integrity
+            distribution = dump * 0.55
+            ret = 0.0
+            elite_arrived = False
+            cohort_formed = False
+            for _step in range(steps):
+                arrival_drive = 0.22 * capital + 0.12 * max(market, 0.0) + 0.10 * fomo + 0.08 * world_prior
+                if rng.random() < max(0.01, min(0.65, 0.05 + arrival_drive)):
+                    capital = min(1.0, capital + rng.uniform(0.03, 0.16))
+                    elite_arrived = elite_arrived or rng.random() < (0.25 + 0.45 * consensus)
+                if rng.random() < max(0.01, min(0.55, 0.03 + 0.35 * capital * integrity)):
+                    cohort_formed = True
+                    holder = min(1.0, holder + rng.uniform(0.02, 0.12))
+                sell_drive = max(0.0, 0.08 + 0.50 * dump + 0.20 * distribution - 0.22 * holder - 0.12 * capital)
+                if rng.random() < min(0.80, sell_drive):
+                    distribution = min(1.0, distribution + rng.uniform(0.04, 0.18))
+                    capital = max(0.0, capital - rng.uniform(0.02, 0.12))
+                else:
+                    distribution = max(0.0, distribution - rng.uniform(0.00, 0.04))
+                liquidity = max(0.0, min(1.0, liquidity + rng.normal(0.006 * (capital - distribution), 0.025)))
+                holder = max(0.0, min(1.0, holder + 0.04 * (capital - distribution) + rng.normal(0.0, 0.025)))
+                step_ret = 0.055 * capital + 0.035 * holder + 0.02 * market - 0.07 * distribution - 0.05 * (1.0 - liquidity)
+                ret += step_ret + rng.normal(0.0, 0.035)
+            returns.append(ret)
+            if holder >= 0.58 and distribution < 0.52:
+                persist_hits += 1
+            if distribution >= 0.62:
+                distribution_hits += 1
+            if liquidity < 0.20 or distribution > 0.84:
+                collapse_hits += 1
+            if elite_arrived:
+                elite_hits += 1
+            if cohort_formed:
+                cohort_hits += 1
+
+        if not actual:
+            return {"mirofish_status": "TIMEOUT"}
+        arr = np.asarray(returns, dtype=float)
         return {
-            "mirofish_enabled": True,
-            "mirofish_status": "MODEL_SIMULATION",
-            "rollout_smart_wave_frequency": outcomes["wave"]/n,
-            "rollout_persistence_frequency": outcomes["persist"]/n,
-            "rollout_distribution_frequency": outcomes["distribute"]/n,
-            "rollout_collapse_frequency": outcomes["collapse"]/n,
-            "rollout_new_elite_frequency": outcomes["new_elite"]/n,
-            "rollout_expected_executable_return": float(np.mean(returns)),
-            "rollout_downside_p10": float(np.quantile(returns,0.10)),
-            "rollout_dispersion": float(np.std(returns)),
-            "rollout_confidence": max(0.0,min(1.0,data_q)),
+            "mirofish_status": "SIMULATION",
+            "mirofish_rollouts": float(actual),
+            "mirofish_persistence_frequency": persist_hits / actual,
+            "mirofish_distribution_frequency": distribution_hits / actual,
+            "mirofish_collapse_frequency": collapse_hits / actual,
+            "mirofish_new_elite_frequency": elite_hits / actual,
+            "mirofish_cohort_formation_frequency": cohort_hits / actual,
+            "mirofish_expected_return_proxy": float(arr.mean()),
+            "mirofish_downside_proxy": float(np.quantile(arr, 0.10)),
+            "mirofish_dispersion": float(arr.std()),
+            "mirofish_data_quality": dq,
         }

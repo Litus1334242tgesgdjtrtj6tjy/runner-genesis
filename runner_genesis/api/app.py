@@ -1,0 +1,236 @@
+from __future__ import annotations
+from datetime import datetime, timezone
+from fastapi import FastAPI, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
+from ..config import load_settings
+from ..orchestrator import RunnerGenesisOmega
+from ..domain.events import MarketEvent
+from ..ingestion.helius import HeliusWebhookNormalizer
+
+settings = load_settings()
+engine = RunnerGenesisOmega(settings)
+app = FastAPI(title='RUNNER GENESIS Ω', version='0.2.0')
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'],
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+normalizer = HeliusWebhookNormalizer()
+
+
+@app.get('/health')
+def health():
+    return {
+        'ok': True,
+        'version': '0.2.0',
+        'mode': settings.mode,
+        'live_trading': settings.live_trading,
+        'paper_only': settings.paper_only,
+        'genesis_model_status': engine.genesis.model_status,
+        'world_model_status': engine.world.model_status,
+        'mirofish_enabled': settings.mirofish.enabled,
+        'fomo_enabled': settings.fomo.enabled,
+        'pending_paper_orders': len(engine.pending_orders),
+    }
+
+
+@app.post('/api/event')
+def ingest_event(event: MarketEvent):
+    result = engine.process(event)
+    return {
+        'snapshot': result.snapshot.model_dump(mode='json'),
+        'risk_approved': result.risk_approved,
+        'risk_reasons': result.risk_reasons,
+        'fill': result.fill.__dict__ if result.fill else None,
+    }
+
+
+@app.post('/api/helius/webhook')
+def helius_webhook(payload: dict, x_runner_secret: str | None = Header(default=None)):
+    import os
+    expected = os.getenv('HELIUS_WEBHOOK_SECRET')
+    if expected and x_runner_secret != expected:
+        raise HTTPException(401, 'invalid webhook secret')
+    results = []
+    items = payload if isinstance(payload, list) else [payload]
+    for item in items:
+        for event in normalizer.normalize(item):
+            r = engine.process(event)
+            results.append(r.snapshot.model_dump(mode='json'))
+    return {'processed': len(results), 'decisions': results}
+
+
+@app.get('/api/tokens')
+def tokens():
+    rows = []
+    last = {d.token_mint: d for d in engine.decisions}
+    for mint, t in engine.store.tokens.items():
+        d = last.get(mint)
+        probs = d.probabilities if d else {}
+        features = d.features if d else {}
+        rows.append({
+            'token': mint,
+            'age': ((t.last_event_at - t.created_at).total_seconds() if t.created_at and t.last_event_at else None),
+            'mc': t.market_cap_usd,
+            'liquidity': t.liquidity_usd,
+            'buyers': len(t.buyers),
+            'genesis_score': features.get('genesis_score'),
+            'genesis_prob': probs.get('genesis_prob'),
+            'p_x2': probs.get('p_x2_60m'),
+            'p_x5': probs.get('p_x5_60m'),
+            'model_status': features.get('genesis_model_status'),
+            'smart_consensus': features.get('weighted_smart_capital_consensus'),
+            'effective_wallets': features.get('effective_wallet_count'),
+            'accumulation': features.get('accumulation_score'),
+            'persistence': features.get('runner_persistence'),
+            'distribution': features.get('distribution_score'),
+            'launch_integrity': features.get('launch_integrity_score'),
+            'manipulation_risk': features.get('manipulation_risk'),
+            'entry_validity': features.get('entry_validity'),
+            'smart_state': features.get('smart_capital_state'),
+            'mirofish_status': features.get('mirofish_status'),
+            'action': d.action if d else None,
+            'position': engine.portfolio.account.positions.get(mint).cost_basis_eur if mint in engine.portfolio.account.positions else 0.0,
+        })
+    return rows
+
+
+@app.get('/api/token/{mint}')
+def token_detail(mint: str):
+    t = engine.store.tokens.get(mint)
+    if not t:
+        raise HTTPException(404, 'token not found')
+    decisions = [d.model_dump(mode='json') for d in engine.decisions if d.token_mint == mint][-100:]
+    fills = [f.__dict__ for f in engine.portfolio.fills if f.token_mint == mint]
+    smart_positions = [engine.smart.position_snapshot(w, m, t.last_event_at or datetime.now(timezone.utc)) for (w, m) in engine.smart.positions if m == mint]
+    transitions = [x.__dict__ for x in engine.smart.transitions if x.token_mint == mint][-100:]
+    return {
+        'token': mint,
+        'state': t.__dict__ | {'buyers': list(t.buyers), 'sellers': list(t.sellers), 'events': []},
+        'decisions': decisions,
+        'fills': fills,
+        'smart_positions': smart_positions,
+        'transitions': transitions,
+        'fomo': engine.fomo.recent(mint),
+    }
+
+
+@app.get('/api/account')
+def account():
+    a = engine.portfolio.account
+    return {
+        'starting_cash_eur': a.starting_cash_eur,
+        'cash_eur': a.cash_eur,
+        'equity_eur': a.equity_eur,
+        'realized_pnl_eur': a.realized_pnl_eur,
+        'positions': {k: v.__dict__ for k, v in a.positions.items()},
+        'pending_orders': {
+            k: {
+                'action': v.proposal.action.value,
+                'signal_time': v.signal_time,
+                'due_time': v.due_time,
+                'amount_eur': v.proposal.amount_eur,
+            }
+            for k, v in engine.pending_orders.items()
+        },
+    }
+
+
+@app.get('/api/smart-capital/wallets')
+def smart_wallets(limit: int = 100):
+    now = max((t.last_event_at for t in engine.store.tokens.values() if t.last_event_at), default=datetime.now(timezone.utc))
+    wallets = sorted(engine.store.wallets)
+    rows = [engine.smart.wallet_metrics(w, now, engine.store) for w in wallets]
+    rows.sort(key=lambda x: float(x.get('wallet_quality_score') or 0.0), reverse=True)
+    return rows[: max(1, min(limit, 1000))]
+
+
+@app.get('/api/smart-capital/tokens')
+def smart_tokens(limit: int = 100):
+    now = max((t.last_event_at for t in engine.store.tokens.values() if t.last_event_at), default=datetime.now(timezone.utc))
+    rows = engine.smart.active_token_rows(now, engine.store, engine.actor)
+    rows.sort(key=lambda x: float(x.get('weighted_smart_capital_consensus') or 0.0), reverse=True)
+    return rows[: max(1, min(limit, 1000))]
+
+
+@app.get('/api/paper/swings')
+def paper_swings():
+    out = []
+    last = {d.token_mint: d for d in engine.decisions}
+    for mint, p in engine.portfolio.account.positions.items():
+        t = engine.store.token(mint)
+        d = last.get(mint)
+        current = float(t.price_usd or p.avg_entry_price)
+        out.append({
+            'token': mint,
+            'entry_price': p.avg_entry_price,
+            'current_price': current,
+            'pnl_pct': current / p.avg_entry_price - 1.0 if p.avg_entry_price > 0 else None,
+            'opened_at': p.opened_at,
+            'hold_seconds': max(0.0, ((t.last_event_at or p.last_updated_at) - p.opened_at).total_seconds()),
+            'persistence': d.features.get('runner_persistence') if d else None,
+            'distribution': d.features.get('distribution_score') if d else None,
+            'action': d.action if d else None,
+        })
+    return out
+
+
+@app.post('/api/discovery/pump/leaderboard')
+def ingest_pump_leaderboard(payload: dict):
+    rows = payload.get('rows') or []
+    at = payload.get('observed_at')
+    if isinstance(at, str):
+        at = datetime.fromisoformat(at.replace('Z', '+00:00'))
+    at = at or datetime.now(timezone.utc)
+    source = str(payload.get('source') or 'PUMP_OFFICIAL')
+    n = engine.discovery.ingest_leaderboard(rows, observed_at=at, source=source)
+    if engine.repository:
+        for snap in engine.discovery.snapshots[-n:] if n else []:
+            engine.repository.record_leaderboard(snap.__dict__)
+    return {'accepted': n, 'source': source, 'observed_at': at}
+
+
+@app.post('/api/discovery/wallet')
+def register_discovery_wallet(payload: dict):
+    engine.discovery.register_wallet(payload)
+    return {'ok': True}
+
+
+@app.get('/api/discovery/pump/leaderboard')
+def latest_pump_leaderboard(limit: int = 100):
+    return engine.discovery.latest_snapshots(limit=max(1, min(limit, 1000)))
+
+
+@app.post('/api/discovery/fomo')
+def ingest_fomo(payload: dict):
+    if 'token_mint' not in payload:
+        raise HTTPException(400, 'token_mint required')
+    obs = engine.fomo.ingest(payload)
+    if engine.repository:
+        engine.repository.record_discovery({
+            'token_mint': obs.token_mint,
+            'wallet_address': None,
+            'observed_at': obs.timestamp,
+            'source': obs.source,
+            'kind': obs.kind,
+            'confidence': obs.confidence,
+            'actor_key': obs.actor_key,
+        })
+    return {'ok': True, 'observation': obs.__dict__}
+
+
+@app.get('/api/discovery/fomo/{mint}')
+def fomo_for_token(mint: str):
+    now = engine.store.tokens.get(mint).last_event_at if mint in engine.store.tokens else datetime.now(timezone.utc)
+    return {'features': engine.fomo.features(mint, now), 'observations': engine.fomo.recent(mint)}
+
+
+@app.get('/api/state-transitions')
+def state_transitions(limit: int = 200):
+    return [x.__dict__ for x in engine.smart.transitions[-max(1, min(limit, 1000)):]]
+
+
+@app.get('/api/alerts')
+def alerts(limit: int = 200):
+    return engine.alerts.recent(max(1, min(limit, 1000)))

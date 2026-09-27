@@ -1,24 +1,50 @@
 from __future__ import annotations
-from typing import Protocol, Iterable
+from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Any, Iterable
 
-class WalletDataProvider(Protocol):
-    def wallet_snapshot(self, wallet: str, as_of: datetime) -> dict | None: ...
 
-class PumpLeaderboardProvider(Protocol):
-    def snapshots(self, as_of: datetime) -> Iterable[dict]: ...
+class WalletDataProvider(ABC):
+    @abstractmethod
+    async def wallet_history(self, wallet: str, before: datetime | None = None) -> list[dict[str, Any]]:
+        raise NotImplementedError
 
-class TransactionProvider(Protocol):
-    def transactions(self, address: str, before: datetime | None = None) -> Iterable[dict]: ...
 
-class PriceProvider(Protocol):
-    def price(self, mint: str, as_of: datetime | None = None) -> dict | None: ...
+class PumpLeaderboardProvider(ABC):
+    @abstractmethod
+    async def snapshot(self, observed_at: datetime) -> list[dict[str, Any]]:
+        raise NotImplementedError
 
-class TokenMetadataProvider(Protocol):
-    def token_metadata(self, mint: str) -> dict | None: ...
 
-class SocialDiscoveryProvider(Protocol):
-    def observations(self, mint: str, as_of: datetime) -> Iterable[dict]: ...
+class TransactionProvider(ABC):
+    @abstractmethod
+    async def transactions(self, address: str, before: datetime | None = None) -> Iterable[dict[str, Any]]:
+        raise NotImplementedError
 
-class FomoDiscoveryProvider(Protocol):
-    def observations(self, mint: str, as_of: datetime) -> Iterable[dict]: ...
+
+class PriceProvider(ABC):
+    @abstractmethod
+    async def price(self, mint: str, at: datetime | None = None) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+
+class TokenMetadataProvider(ABC):
+    @abstractmethod
+    async def metadata(self, mint: str, at: datetime | None = None) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+
+class SocialDiscoveryProvider(ABC):
+    @abstractmethod
+    async def observations(self, mint: str, since: datetime) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+
+class FomoDiscoveryProvider(SocialDiscoveryProvider):
+    pass
+
+
+class MiroFishRolloutProvider(ABC):
+    @abstractmethod
+    def rollouts(self, mint: str, decision_time: datetime, state: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError

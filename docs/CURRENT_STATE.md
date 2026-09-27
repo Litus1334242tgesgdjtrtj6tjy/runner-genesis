@@ -1,36 +1,31 @@
 # Current State
 
-VERSION: v0.2.0-work
+VERSION: 0.2.0-development
 BRANCH: work/v0.2-smart-capital-world-model
-SAFE_MODE_STATUS: PAPER ONLY / LIVE_TRADING=false
+SAFE_MODE_STATUS: LIVE_TRADING=false; no live sender/private key support.
 
-## Completed in the current implementation pass
-- Full v0.1.2 ZIP source recovered and audited locally.
-- Existing baseline tests preserved and suite expanded to 19 passing tests.
-- Smart Capital wallet-token position reconstruction.
-- Wallet strategy classifier: SCALPER/RUNNER/SWING/HOLDER/MIXED/UNKNOWN.
-- Accumulation, conviction, weighted consensus and effective-wallet breadth.
-- Actor-graph independence correction.
-- Entry-distance and ENTRY_TOO_LATE semantics.
-- Launch Integrity / coordinated dump / sellability research features.
-- Optional FOMO context engine with safe disabled fallback.
-- Optional MiroFish Future Rollout Engine with deterministic seeded simulations.
-- Pump leaderboard point-in-time snapshot engine (provider-fed; no invented external endpoint).
-- Expanded SQLAlchemy research tables for wallet metrics, leaderboard snapshots, wallet positions, smart token states, transitions and rollout summaries.
-- Untrained Genesis no longer emits fake-looking X2/X5 probabilities.
-- World heuristic outputs explicitly marked UNTRAINED_SIMULATION.
-- New features integrated into orchestrator, trader, Risk Governor, API and dashboard locally.
-- Local pytest result: 19 passed.
-- Demo backtest completed: 35 events / 35 decisions / no crashes.
+## Completed in this implementation pass
+- Full source restored locally from `runner_genesis_omega_v0.1.2(1).zip`.
+- Baseline before modifications: 9 tests passed.
+- Candidate Universe Gate added.
+- Explicit unknown-data semantics improved for token quality/risk fields.
+- Untrained Genesis no longer emits fake-looking P_X2/P_X5/etc values.
+- World Model heuristic fallback renamed to scores rather than probabilities.
+- Smart Capital position reconstruction, style/quality context, conviction, accumulation, independence-corrected consensus and entry distance implemented.
+- Actor Graph now calculates independence/effective wallet count/cohort and same-funder concentration.
+- Pump/KOL discovery registry and historical leaderboard snapshot ingestion implemented.
+- Optional FOMO context engine implemented.
+- Launch Integrity / manipulation / dump / sellability engine implemented.
+- MiroFish-style future rollout engine implemented and disabled by default.
+- Runner Persistence extended with Smart Capital, Launch Integrity, FOMO and optional rollout context.
+- AI Paper Trader extended with PROTECT/PARTIAL_EXIT and stricter entry validity.
+- Risk Governor integrates sellability/manipulation/entry-too-late vetoes.
+- Configurable delayed PAPER ENTER/ADD execution implemented.
+- Research persistence schema expanded.
+- Smart Capital/FOMO/Pump/alerts API endpoints added.
+- Existing dashboard expanded with Smart Capital and model-status fields.
+- Test suite expanded to 17 passing tests.
+- Demo end-to-end backtest completed: 35 events / 35 decisions / 0 fills / €300 ending equity. Zero fills is expected because the default policy requires a trained Genesis model for entry.
 
-## Repository note
-The GitHub branch existed with bootstrap payload chunks but still did not expose the full runtime source tree directly. The authoritative full v0.2 working tree currently exists in the generated local package/ZIP from this ChatGPT session. Do not invent missing source from egg-info.
-
-## Pending
-- Real Pump.fun official leaderboard adapter and durable snapshot ingestion.
-- Historical 500–1000 wallet backfill and queue/cache layer.
-- Full PnL reconstruction across all swaps/transfers/funding paths.
-- Real KOL/FOMO providers.
-- Walk-forward/OOS model promotion.
-- Event-scheduled T+delay paper execution.
-- MiroFish ablation vs simple stochastic controls.
+## Not yet scientifically validated
+No claim of trading edge has been established. Genesis/World Model are UNTRAINED unless user-supplied historical point-in-time datasets and model artifacts are present. MiroFish is experimental and disabled. FOMO is disabled until a real provider is configured or observations are posted.

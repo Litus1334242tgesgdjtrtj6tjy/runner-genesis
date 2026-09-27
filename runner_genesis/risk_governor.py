@@ -1,0 +1,65 @@
+from __future__ import annotations
+from dataclasses import dataclass, field
+from .ai_trader import TradeProposal, Action
+from .domain.state import PaperAccount, TokenState
+
+
+@dataclass
+class RiskDecision:
+    approved: bool
+    proposal: TradeProposal
+    reasons: list[str] = field(default_factory=list)
+
+
+class RiskGovernor:
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def evaluate(self, p: TradeProposal, account: PaperAccount, token: TokenState, estimated_slippage_pct: float = 0.0, features: dict | None = None) -> RiskDecision:
+        f = features or {}
+        r: list[str] = []
+        if self.cfg.kill_switch:
+            r.append('KILL_SWITCH')
+
+        if p.action in (Action.ENTER, Action.ADD):
+            max_from_pct = max(0.0, account.equity_eur * self.cfg.max_account_pct_per_trade)
+            cap = min(self.cfg.max_position_eur, max_from_pct)
+            current = account.positions.get(p.token_mint)
+            current_cost = current.cost_basis_eur if current else 0.0
+            if current_cost + p.amount_eur > cap + 1e-9:
+                r.append('MAX_POSITION')
+            if p.amount_eur > account.cash_eur:
+                r.append('INSUFFICIENT_CASH')
+            if p.token_mint not in account.positions and len(account.positions) >= self.cfg.max_simultaneous_positions:
+                r.append('MAX_SIMULTANEOUS_POSITIONS')
+            if account.daily_spend_eur + p.amount_eur > self.cfg.max_daily_spend_eur:
+                r.append('MAX_DAILY_SPEND')
+            if token.liquidity_usd is None:
+                r.append('LIQUIDITY_UNKNOWN')
+            elif token.liquidity_usd < self.cfg.min_liquidity_usd:
+                r.append('MIN_LIQUIDITY')
+            if token.dev_holdings_pct is not None and token.dev_holdings_pct > self.cfg.max_dev_holdings_pct:
+                r.append('DEV_CONCENTRATION')
+            if token.sniper_pct is not None and token.sniper_pct > self.cfg.max_sniper_pct:
+                r.append('SNIPER_CONCENTRATION')
+            if token.bundle_pct is not None and token.bundle_pct > self.cfg.max_bundle_pct:
+                r.append('BUNDLE_CONCENTRATION')
+            if token.suspected_related_concentration_pct is not None and token.suspected_related_concentration_pct > self.cfg.max_suspected_related_concentration_pct:
+                r.append('RELATED_CONCENTRATION')
+            sellability = f.get('sellability_score')
+            if sellability is not None and float(sellability) < self.cfg.min_sellability_score:
+                r.append('SELLABILITY_RISK')
+            manipulation = f.get('manipulation_risk')
+            if manipulation is not None and float(manipulation) > self.cfg.max_manipulation_risk:
+                r.append('MANIPULATION_RISK')
+            if str(f.get('entry_validity', 'VALID')) == 'ENTRY_TOO_LATE':
+                r.append('ENTRY_TOO_LATE')
+
+        if estimated_slippage_pct > self.cfg.max_slippage_pct:
+            r.append('MAX_SLIPPAGE')
+        dd = (account.peak_equity_eur - account.equity_eur) / max(account.peak_equity_eur, 1e-9)
+        if dd > self.cfg.max_portfolio_drawdown_pct:
+            r.append('MAX_DRAWDOWN')
+        if account.realized_pnl_eur < -self.cfg.max_daily_loss_eur:
+            r.append('MAX_DAILY_LOSS')
+        return RiskDecision(not r, p, r)

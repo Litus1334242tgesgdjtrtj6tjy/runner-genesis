@@ -5,6 +5,8 @@ currency: EUR
 
 features:
   social_enabled: false
+  database_persistence:
+    enabled: true
   flywire:
     enabled: false
     artifact_dir: ./artifacts/flywire
@@ -30,6 +32,48 @@ features:
   genesis_model:
     model_path: ./artifacts/models/genesis_model.joblib
 
+smart_capital:
+  enabled: true
+  min_wallet_quality: 0.20
+  min_strategy_match: 0.35
+  min_effective_wallets: 1.25
+  min_consensus: 0.55
+  min_accumulation: 0.45
+  min_conviction: 0.35
+  max_entry_distance_price: 1.50
+  freshness_half_life_seconds: 900
+  quality_sample_target: 30
+  state_confirm_threshold: 0.62
+  state_persistence_threshold: 0.68
+  distribution_protect_threshold: 0.58
+  distribution_exit_threshold: 0.76
+
+pump_discovery:
+  enabled: true
+  top_traders_enabled: true
+  kol_enabled: true
+  cohort_enabled: true
+  max_snapshot_age_seconds: 3600
+
+fomo:
+  enabled: false
+  minimum_source_confidence: 0.35
+  maximum_source_age_seconds: 900
+  window_seconds: 300
+
+mirofish:
+  enabled: false
+  num_rollouts: 128
+  horizon_seconds: 900
+  random_seed: 20260927
+  max_agents: 64
+  rollout_timeout_ms: 250
+  use_world_model_prior: true
+  require_min_data_quality: 0.45
+
+persistence:
+  enabled: true
+
 risk:
   max_position_eur: 25.0
   max_account_pct_per_trade: 0.08
@@ -44,11 +88,14 @@ risk:
   max_bundle_pct: 0.30
   max_suspected_related_concentration_pct: 0.35
   max_correlated_exposure_pct: 0.35
+  min_sellability_score: 0.25
+  max_manipulation_risk: 0.78
   kill_switch: false
 
 execution:
   latency_ms_mean: 1100
   latency_ms_std: 250
+  execution_delay_seconds: 60
   base_fee_bps: 35
   priority_fee_bps: 10
   mev_adverse_bps: 20
@@ -67,6 +114,7 @@ trader:
   moonbag_fraction: 0.15
   max_adds_per_position: 2
   default_position_eur: 10.0
+  require_trained_for_entry: true
 
 point_in_time:
   strict: true

@@ -1,23 +1,16 @@
 # Test Results
 
-Latest local test run:
+Latest local command:
 
+```text
 python -m pytest -q
+```
 
-Result: **19 passed**.
+Result: **17 passed**.
 
-Added coverage includes:
-- TRANSFER != SELL
-- wallet-token position add/reduce/exit
-- smart-capital bounded features
-- related-wallet effective count
-- Launch Integrity ordering
-- Pump leaderboard point-in-time snapshots/rank dynamics
-- SQLAlchemy research-table creation
-- MiroFish deterministic seeded rollouts
-- MiroFish disabled fallback
-- untrained Genesis does not emit fake X2/X5 probabilities
+Additional checks:
+- `python -m compileall -q runner_genesis` succeeded.
+- FastAPI TestClient `/health`, `/api/tokens`, `/api/smart-capital/wallets` returned HTTP 200.
+- Demo end-to-end backtest processed 35 events and 35 decisions without a live trade path.
 
-Existing asset gate, point-in-time, Capital Surprise, execution, Risk Governor, FlyWire preprocessing, shadow forwarding and end-to-end replay tests remain passing.
-
-Demo backtest after integration: 35 events, 35 decisions, ending equity €300, no runtime failure.
+Coverage includes existing point-in-time/asset gate/capital surprise/risk/execution/FlyWire/replay/shadow tests plus new Smart Capital position, transfer!=sell, same-funder independence, weighted consensus, entry distance, Launch Integrity, FOMO point-in-time filtering, untrained-probability behavior, deterministic MiroFish rollouts and delayed PAPER entry.

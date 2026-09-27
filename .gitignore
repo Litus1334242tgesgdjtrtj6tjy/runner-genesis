@@ -1,0 +1,11 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+dist/
+runner_genesis.db
+*.egg-info/
+artifacts/models/*
+!artifacts/models/.gitkeep

@@ -1,10 +1,12 @@
 # Known Limitations
 
-- Current Smart Capital quality reuses the existing resolved-history mechanism; it is not yet a complete on-chain accounting ledger.
-- Wallet liquid capital is intentionally not invented when unavailable.
-- Actor independence is a probabilistic graph heuristic, not proof of common ownership.
-- MiroFish is currently an internal role-based stochastic rollout implementation inspired by the concept, not an external MiroFish service integration.
-- FOMO is disabled by default and has no external provider enabled.
-- Pump discovery currently accepts timestamped provider observations; no undocumented Pump.fun endpoint is fabricated.
-- Genesis/World fallback values are research scores/estimates only.
-- execution_delay_seconds exists in config; full event-scheduled delayed entry remains pending.
+- No validated trained Genesis or World Model artifact ships with v0.2.
+- No direct Pump.fun leaderboard scraper/API adapter is hardcoded because provider endpoints/eligibility can change; snapshots can be ingested through a stable internal API/provider interface.
+- FOMO has no mandatory external social provider and is disabled by default.
+- MiroFish is a local MiroFish-style simulator, not an external MiroFish service integration.
+- Route-specific live DEX fee schedules are not yet versioned by venue/effective date.
+- Failed-transaction network-fee accounting remains simplified in the PAPER execution model.
+- Current reference process is in-memory for active state; append-only database snapshots provide research persistence but full restart hydration has not yet been implemented.
+- Wallet PnL quality depends on resolved historical observations/backfill data; newly observed wallets correctly remain low-confidence.
+- Cohorts/clans are probabilistic behavioral clusters, not identity claims.
+- Large-scale 500–1000 wallet performance has not yet been load-tested.
