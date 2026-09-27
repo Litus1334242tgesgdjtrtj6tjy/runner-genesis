@@ -25,6 +25,28 @@ class ResearchSyncCoordinator:
         self._last_sync: datetime | None = None
         self._last_result: dict[str, Any] = {"status": "NOT_RUN"}
         self.wallet_priority = WalletDiscoveryPriorityEngine(settings.external_discovery)
+        self._hydrate_backfill_status()
+
+    @staticmethod
+    def _aware(ts: datetime) -> datetime:
+        return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+    def _hydrate_backfill_status(self) -> None:
+        repository = getattr(self.engine, "repository", None)
+        if repository is None or not hasattr(repository, "load_wallet_backfill_status"):
+            return
+        try:
+            rows = repository.load_wallet_backfill_status(
+                limit=max(1, int(self.settings.helius_history.hydrate_max_rows))
+            )
+        except Exception:
+            return
+        for row in rows:
+            wallet = str(row.get("wallet_address") or "").strip()
+            ts = row.get("last_success_at")
+            if wallet and isinstance(ts, datetime):
+                self._last_backfill[wallet] = self._aware(ts)
+                self._seen_wallets.add(wallet)
 
     @property
     def enabled(self) -> bool:
@@ -423,9 +445,13 @@ class ResearchSyncCoordinator:
                         apply_actor_events=False,
                         apply_funding=False,
                     )
-                    backfills.append(asdict(result))
+                    result_payload = asdict(result)
+                    backfills.append(result_payload)
                     self._seen_wallets.add(wallet)
                     self._last_backfill[wallet] = now
+                    repository = getattr(self.engine, "repository", None)
+                    if repository is not None and hasattr(repository, "record_wallet_backfill_status"):
+                        repository.record_wallet_backfill_status(wallet, now, result_payload)
 
         self._last_sync = datetime.now(timezone.utc)
         status = "OK" if qualification_by_wallet else "WAITING_DISCOVERY_SOURCE"
