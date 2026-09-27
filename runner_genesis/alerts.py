@@ -70,7 +70,20 @@ class AlertEngine:
         self.last_persistence[mint] = p
 
         if float(features.get('top_trader_wave_score', 0.0) or 0.0) >= 0.60:
-            add('TOP_TRADER_WAVE', 'Pump top-trader wave context detected')
+            add('TOP_TRADER_WAVE', 'Pump top-trader wave context detected', payload={
+                'raw_top_traders': features.get('top_trader_count'),
+                'effective_top_traders': features.get('top_trader_effective_count'),
+                'new_top_traders_60s': features.get('new_top_traders_60s'),
+            })
+        if (
+            float(features.get('cohort_concentration', 0.0) or 0.0) >= 0.60
+            and float(features.get('raw_wallet_count', 0.0) or 0.0) >= 3.0
+        ):
+            add('PUMPFUN_COHORT_FORMING', 'Related wallet cohort activity is forming', 'INFO', {
+                'raw_wallets': features.get('raw_wallet_count'),
+                'effective_wallets': features.get('effective_wallet_count'),
+                'same_funder_concentration': features.get('same_funder_concentration'),
+            })
         if float(features.get('kol_wave_score', 0.0) or 0.0) >= 0.60:
             add('KOL_WAVE', 'KOL-discovery wave context detected')
         if float(features.get('fomo_score', 0.0) or 0.0) >= 0.65:
