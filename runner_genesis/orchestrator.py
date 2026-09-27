@@ -30,6 +30,7 @@ from .engines.launch_integrity import LaunchIntegrityEngine
 from .engines.fomo import FomoEngine
 from .engines.mirofish import MiroFishRolloutEngine
 from .engines.cohorts import CohortDiscoveryEngine
+from .engines.fusion import MultiBrainStateFusionEngine
 from .ai_trader import AIPaperTrader, Action, TradeProposal
 from .risk_governor import RiskGovernor
 from .execution import PaperExecutionEngine, PaperFill
@@ -91,6 +92,7 @@ class RunnerGenesisOmega:
         self.fomo = FomoEngine(settings.fomo)
         self.mirofish = MiroFishRolloutEngine(settings.mirofish)
         self.cohorts = CohortDiscoveryEngine()
+        self.fusion = MultiBrainStateFusionEngine()
         self.exec_alpha = ExecutableAlphaModel()
         self.trader = AIPaperTrader(settings.trader)
         self.risk = RiskGovernor(settings.risk)
@@ -228,6 +230,9 @@ class RunnerGenesisOmega:
             e.token_mint, e.timestamp, float(persistence.get('runner_persistence', 0.0)),
             float(persistence.get('distribution_score', 0.0)), f,
         )
+
+        fusion = self.fusion.compute(f, probs)
+        f.update(fusion)
 
         alpha = self.exec_alpha.compute(probs, f, self.settings.trader.default_position_eur, self.settings.execution)
         f.update(alpha)
