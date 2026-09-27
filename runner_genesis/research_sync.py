@@ -442,6 +442,7 @@ class ResearchSyncCoordinator:
                         bundle,
                         self.engine.store,
                         self.engine.actor,
+                        smart=self.engine.smart,
                         apply_actor_events=False,
                         apply_funding=False,
                     )
