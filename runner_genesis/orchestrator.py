@@ -329,6 +329,15 @@ class RunnerGenesisOmega:
         if pending is None or now < pending.due_time:
             return None, []
 
+        if str(features.get('entry_validity')) != 'VALID':
+            del self.pending_orders[mint]
+            if self.repository:
+                self.repository.record_paper_update(
+                    mint, now, 'PENDING_SIGNAL_INVALIDATED',
+                    {'entry_validity': features.get('entry_validity'), 'signal_time': pending.signal_time, 'due_time': pending.due_time},
+                )
+            return None, ['PENDING_SIGNAL_INVALIDATED']
+
         # A delayed entry must use a quote explicitly observed on the current verified
         # event. TokenState may still contain an older cached price/liquidity value.
         if market_event is not None:
@@ -345,13 +354,6 @@ class RunnerGenesisOmega:
                 return None, ['WAITING_FRESH_EXECUTION_QUOTE']
 
         del self.pending_orders[mint]
-        if str(features.get('entry_validity')) != 'VALID':
-            if self.repository:
-                self.repository.record_paper_update(
-                    mint, now, 'PENDING_SIGNAL_INVALIDATED',
-                    {'entry_validity': features.get('entry_validity'), 'signal_time': pending.signal_time, 'due_time': pending.due_time},
-                )
-            return None, ['PENDING_SIGNAL_INVALIDATED']
         fill, approved, reasons = self._execute(pending.proposal, token, now, features)
         if not approved:
             return fill, reasons
