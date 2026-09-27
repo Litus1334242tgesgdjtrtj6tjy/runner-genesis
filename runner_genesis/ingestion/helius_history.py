@@ -221,7 +221,17 @@ class EnhancedWalletHistoryNormalizer:
         )]
 
     def funding_links(self, wallet: str, tx: dict[str, Any], min_sol: float = 0.01) -> list[FundingLink]:
-        """Extract direct incoming SOL funding evidence without pretending ownership."""
+        """Extract conservative direct incoming SOL funding evidence.
+
+        Swap proceeds are NEVER funding evidence: treating a DEX pool that sends SOL on a
+        SELL as a wallet funder would create giant false cohorts. We therefore only accept
+        native-transfer-style transactions with no token transfer leg.
+        """
+        tx_type = str(tx.get("type") or "").upper()
+        if tx_type == "SWAP" or (tx.get("tokenTransfers") or []):
+            return []
+        if tx_type and tx_type not in {"TRANSFER", "UNKNOWN"}:
+            return []
         ts = self._timestamp(tx)
         sig = str(tx.get("signature") or "") or None
         out: list[FundingLink] = []
