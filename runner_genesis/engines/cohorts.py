@@ -107,12 +107,27 @@ class CohortDiscoveryEngine:
             density = float(nx.density(sub)) if len(members) > 1 else 0.0
             relation_diversity = _clip(len(relations) / 4.0)
             structure = _clip(0.55 * mean_conf + 0.30 * density + 0.15 * relation_diversity)
-            alpha_context = _clip(
+            base_alpha = _clip(
                 0.32 * avg_quality
                 + 0.20 * breadth
                 + 0.14 * avg_swing
                 + 0.14 * avg_hold
                 + 0.20 * structure
+            )
+            independence_ratio = effective / len(members)
+            same_funder = actor._same_funder_concentration(members)
+            coordination_risk = _clip(
+                0.50 * (1.0 - independence_ratio)
+                + 0.35 * same_funder
+                + 0.15 * mean_conf * (1.0 - independence_ratio)
+            )
+            # A dense clan is useful only when it also contains genuine independent
+            # breadth. This prevents a highly coordinated same-funder cluster from being
+            # ranked as a better alpha cohort merely because its graph is dense.
+            alpha_context = _clip(
+                base_alpha
+                * (0.55 + 0.45 * independence_ratio)
+                * (1.0 - 0.50 * same_funder)
             )
             cid = hashlib.sha256("|".join(members).encode()).hexdigest()[:16]
             rows.append({
@@ -120,16 +135,19 @@ class CohortDiscoveryEngine:
                 "members": members,
                 "raw_wallet_count": len(members),
                 "effective_wallet_count": effective,
-                "independence_ratio": effective / len(members),
+                "independence_ratio": independence_ratio,
                 "mean_edge_confidence": mean_conf,
                 "edge_density": density,
                 "relation_diversity": relation_diversity,
-                "same_funder_concentration": actor._same_funder_concentration(members),
+                "same_funder_concentration": same_funder,
                 "relation_counts": dict(relations),
                 "average_wallet_quality": avg_quality,
                 "average_swing_score": avg_swing,
                 "average_hold_score": avg_hold,
                 "cohort_structure_score": structure,
+                "cohort_base_alpha_score": base_alpha,
+                "cohort_risk_score": coordination_risk,
+                "cohort_alpha_score": alpha_context,
                 "cohort_score": alpha_context,
                 "community_method": method,
                 "as_of": as_of,
