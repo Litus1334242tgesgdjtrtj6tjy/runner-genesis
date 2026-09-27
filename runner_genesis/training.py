@@ -407,3 +407,102 @@ def train_genesis_from_dataset(
     out.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(artifact, out)
     return {k: v for k, v in artifact.items() if k != "models"}
+
+
+
+def walk_forward_evaluate(
+    dataset_path: str | Path,
+    *,
+    target: str = "y_executable_runner",
+    min_train_rows: int = 100,
+    folds: int = 4,
+) -> dict[str, Any]:
+    """Expanding chronological walk-forward evaluation with in-window Platt calibration."""
+    path = Path(dataset_path)
+    df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
+    if target not in df or "decision_time" not in df:
+        raise ValueError(f"dataset requires decision_time and {target}")
+    df["decision_time"] = pd.to_datetime(df["decision_time"], utc=True)
+    df = df.sort_values("decision_time").reset_index(drop=True)
+    n = len(df)
+    min_train_rows = max(20, int(min_train_rows))
+    if n <= min_train_rows + 10:
+        raise ValueError("not enough rows for walk-forward evaluation")
+    folds = max(2, int(folds))
+    remaining = n - min_train_rows
+    block = max(1, remaining // folds)
+
+    fold_results = []
+    all_y = []
+    all_p = []
+    for fold in range(folds):
+        test_start = min_train_rows + fold * block
+        test_end = n if fold == folds - 1 else min(n, test_start + block)
+        if test_start >= n or test_end <= test_start:
+            continue
+        history = df.iloc[:test_start]
+        calibration_rows = max(10, int(len(history) * 0.20))
+        fit_end = len(history) - calibration_rows
+        if fit_end < 20:
+            continue
+        fit = history.iloc[:fit_end]
+        calibration = history.iloc[fit_end:]
+        test = df.iloc[test_start:test_end]
+
+        y_fit = fit[target].astype(int).to_numpy()
+        y_cal = calibration[target].astype(int).to_numpy()
+        y_test = test[target].astype(int).to_numpy()
+        if len(np.unique(y_fit)) < 2:
+            fold_results.append({"fold": fold, "status": "SKIP_FIT_SINGLE_CLASS"})
+            continue
+
+        X_fit = fit.reindex(columns=FEATURE_ORDER, fill_value=0.0).fillna(0.0).astype(float).to_numpy()
+        X_cal = calibration.reindex(columns=FEATURE_ORDER, fill_value=0.0).fillna(0.0).astype(float).to_numpy()
+        X_test = test.reindex(columns=FEATURE_ORDER, fill_value=0.0).fillna(0.0).astype(float).to_numpy()
+
+        base = Pipeline([
+            ("scale", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=2000, class_weight="balanced", random_state=783 + fold)),
+        ])
+        base.fit(X_fit, y_fit)
+
+        calibrator = None
+        raw_cal = np.clip(base.predict_proba(X_cal)[:, 1], 1e-6, 1 - 1e-6)
+        if len(np.unique(y_cal)) >= 2:
+            logits = np.log(raw_cal / (1 - raw_cal)).reshape(-1, 1)
+            calibrator = LogisticRegression(max_iter=1000, random_state=1783 + fold)
+            calibrator.fit(logits, y_cal)
+        model = PlattCalibratedBinaryModel(base, calibrator)
+        p_test = model.predict_proba(X_test)[:, 1]
+        metrics = _safe_metric(y_test, p_test)
+        fold_results.append({
+            "fold": fold,
+            "status": "OK",
+            "fit_rows": len(fit),
+            "calibration_rows": len(calibration),
+            "test_rows": len(test),
+            "train_end": str(history.iloc[-1]["decision_time"]),
+            "test_start": str(test.iloc[0]["decision_time"]),
+            "test_end": str(test.iloc[-1]["decision_time"]),
+            "test_positive_rate": float(np.mean(y_test)),
+            "calibrated": calibrator is not None,
+            **metrics,
+        })
+        all_y.extend(y_test.tolist())
+        all_p.extend(p_test.tolist())
+
+    ok = [x for x in fold_results if x.get("status") == "OK"]
+    if not ok:
+        raise ValueError("no valid walk-forward folds")
+    aggregate = _safe_metric(np.asarray(all_y, dtype=int), np.asarray(all_p, dtype=float))
+    aggregate.update({
+        "rows_scored": len(all_y),
+        "folds_scored": len(ok),
+        "positive_rate": float(np.mean(all_y)) if all_y else None,
+    })
+    return {
+        "target": target,
+        "feature_order": FEATURE_ORDER,
+        "folds": fold_results,
+        "aggregate": aggregate,
+    }
