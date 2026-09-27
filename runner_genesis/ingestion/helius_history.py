@@ -67,6 +67,7 @@ class HeliusWalletHistoryClient:
         pages = max(1, int(max_pages))
         cursor = before
         out: list[dict[str, Any]] = []
+        seen_signatures: set[str] = set()
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             for _ in range(pages):
                 params: dict[str, Any] = {"api-key": self.api_key, "limit": limit}
@@ -75,10 +76,21 @@ class HeliusWalletHistoryClient:
                 url = f"{self.base_url}/v0/addresses/{address}/transactions"
                 payload = None
                 for attempt in range(self.max_retries + 1):
-                    response = await client.get(url, params=params)
-                    if response.status_code == 429 and attempt < self.max_retries:
-                        retry_after = float(response.headers.get("retry-after") or 1.0)
-                        await asyncio.sleep(min(10.0, max(0.25, retry_after)))
+                    try:
+                        response = await client.get(url, params=params)
+                    except httpx.RequestError:
+                        if attempt >= self.max_retries:
+                            raise
+                        await asyncio.sleep(min(8.0, 0.5 * (2 ** attempt)))
+                        continue
+                    retryable = response.status_code == 429 or 500 <= response.status_code < 600
+                    if retryable and attempt < self.max_retries:
+                        raw = response.headers.get("retry-after")
+                        try:
+                            delay = float(raw) if raw is not None else 0.5 * (2 ** attempt)
+                        except (TypeError, ValueError):
+                            delay = 0.5 * (2 ** attempt)
+                        await asyncio.sleep(min(10.0, max(0.25, delay)))
                         continue
                     response.raise_for_status()
                     payload = response.json()
@@ -86,7 +98,13 @@ class HeliusWalletHistoryClient:
                 if not isinstance(payload, list) or not payload:
                     break
                 rows = [x for x in payload if isinstance(x, dict)]
-                out.extend(rows)
+                for row in rows:
+                    sig = str(row.get("signature") or "")
+                    if sig and sig in seen_signatures:
+                        continue
+                    if sig:
+                        seen_signatures.add(sig)
+                    out.append(row)
                 if len(rows) < limit:
                     break
                 last_sig = rows[-1].get("signature")
