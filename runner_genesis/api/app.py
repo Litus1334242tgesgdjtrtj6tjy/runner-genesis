@@ -305,6 +305,7 @@ async def research_backfill_wallet(wallet: str, max_pages: int | None = None):
         wallet,
         engine.store,
         engine.actor,
+        smart=engine.smart,
         limit=settings.helius_history.page_limit,
         max_pages=max_pages or settings.helius_history.max_pages,
     )
