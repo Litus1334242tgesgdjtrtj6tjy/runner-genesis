@@ -138,3 +138,4 @@ external_discovery:
   auto_refresh: true
   refresh_seconds: 300
   max_wallets_per_refresh: 25
+  top_wallet_backfill_fraction: 0.60
