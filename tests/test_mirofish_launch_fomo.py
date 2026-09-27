@@ -75,3 +75,26 @@ def test_fomo_dedupes_provider_callout_id():
     assert eng.ingest(row) is not None
     assert eng.ingest(row) is None
     assert len(eng.recent('M')) == 1
+
+
+
+def test_launch_integrity_uses_same_population_for_independence_ratio():
+    token = TokenState(
+        'M',
+        price_usd=1,
+        market_cap_usd=100_000,
+        liquidity_usd=100_000,
+    )
+    token.buyers = {f'B{i}' for i in range(100)}
+    features = LaunchIntegrityEngine().features(
+        token,
+        {
+            'effective_wallet_count': 3.6,
+            'raw_wallet_count': 4.0,
+            'independence_ratio': 0.9,
+            'cluster_mean_confidence': 0.0,
+            'same_funder_concentration': 0.0,
+        },
+    )
+    assert abs(features['real_holder_diversity'] - 0.9) < 1e-12
+    assert features['launch_integrity_score'] > 0.8
