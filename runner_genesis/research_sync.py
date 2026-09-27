@@ -340,44 +340,66 @@ class ResearchSyncCoordinator:
             self.settings.external_discovery.fomoscan_enabled
             and self.settings.fomoscan_api_key
         )
+        provider_error: dict[str, str] | None = None
         if fomo_provider_enabled:
             provider = FomoScanPumpProvider(
                 self.settings.fomoscan_api_key,
                 base_url=self.settings.fomoscan_base_url,
             )
-            rows, observed_at = await provider.pump_leaderboard()
-            discovery_source = "FOMOSCAN_PUMP"
-            if self.settings.fomo.enabled:
-                try:
-                    callouts, callout_observed_at = await provider.pump_callouts(limit=100)
-                    for row in callouts:
-                        obs = self._callout_observation(row, callout_observed_at)
-                        if obs is None:
-                            continue
-                        ingested = self.engine.fomo.ingest(obs)
-                        if ingested is None:
-                            continue
-                        callout_count += 1
-                        if self.engine.repository:
-                            self.engine.repository.record_discovery({
-                                "token_mint": obs["token_mint"],
-                                "wallet_address": None,
-                                "observed_at": obs["timestamp"],
-                                "source": obs["source"],
-                                "kind": obs["kind"],
-                                "actor_key": obs["actor_key"],
-                            })
-                except Exception:
-                    callout_count = 0
+            try:
+                rows, observed_at = await provider.pump_leaderboard()
+                discovery_source = "FOMOSCAN_PUMP"
+            except Exception as exc:
+                # External discovery is optional. Keep Helius qualification alive from
+                # persisted/manual/live-onchain candidates when the provider is degraded.
+                provider_error = {
+                    "error": type(exc).__name__,
+                    "message": str(exc)[:200],
+                }
+                rows = self._seed_rows_from_registry()
+                discovery_source = "FOMOSCAN_ERROR_FALLBACK_REGISTRY"
+                if rows:
+                    observed_at = max(
+                        (
+                            row.get("observed_at")
+                            for row in rows
+                            if isinstance(row.get("observed_at"), datetime)
+                        ),
+                        default=observed_at,
+                    )
 
-            accepted = self.engine.discovery.ingest_leaderboard(
-                rows,
-                observed_at=observed_at,
-                source="PUMPFUN_TOP_TRADER",
-            )
-            if self.engine.repository and accepted:
-                for snap in self.engine.discovery.snapshots[-accepted:]:
-                    self.engine.repository.record_leaderboard(snap.__dict__)
+            if provider_error is None:
+                if self.settings.fomo.enabled:
+                    try:
+                        callouts, callout_observed_at = await provider.pump_callouts(limit=100)
+                        for row in callouts:
+                            obs = self._callout_observation(row, callout_observed_at)
+                            if obs is None:
+                                continue
+                            ingested = self.engine.fomo.ingest(obs)
+                            if ingested is None:
+                                continue
+                            callout_count += 1
+                            if self.engine.repository:
+                                self.engine.repository.record_discovery({
+                                    "token_mint": obs["token_mint"],
+                                    "wallet_address": None,
+                                    "observed_at": obs["timestamp"],
+                                    "source": obs["source"],
+                                    "kind": obs["kind"],
+                                    "actor_key": obs["actor_key"],
+                                })
+                    except Exception:
+                        callout_count = 0
+
+                accepted = self.engine.discovery.ingest_leaderboard(
+                    rows,
+                    observed_at=observed_at,
+                    source="PUMPFUN_TOP_TRADER",
+                )
+                if self.engine.repository and accepted:
+                    for snap in self.engine.discovery.snapshots[-accepted:]:
+                        self.engine.repository.record_leaderboard(snap.__dict__)
         else:
             rows = self._seed_rows_from_registry()
             if rows:
@@ -518,6 +540,7 @@ class ResearchSyncCoordinator:
             ],
             "accepted_snapshots": accepted,
             "fomo_callouts_ingested": callout_count,
+            "external_discovery_error": provider_error,
             "wallet_backfills": backfills,
             "wallet_backfills_skipped_recent": skipped_recent,
         }
