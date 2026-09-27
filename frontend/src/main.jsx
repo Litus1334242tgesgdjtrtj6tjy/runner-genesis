@@ -17,7 +17,7 @@ function App(){
  }catch(e){setErr(String(e))}};
  useEffect(()=>{refresh();const id=setInterval(refresh,2500);return()=>clearInterval(id)},[]);
  return <main>
-  <header><div><h1>RUNNER GENESIS Ω</h1><p>ON-CHAIN FIRST · PAPER ONLY · SMART CAPITAL v0.2</p></div><div className="account"><b>Equity €{fmt(acct?.equity_eur)}</b><span>Cash €{fmt(acct?.cash_eur)}</span><span>PnL €{fmt(acct?.realized_pnl_eur)}</span><span>Pending {health?.pending_paper_orders??0}</span></div></header>
+  <header><div><h1>RUNNER GENESIS Ω</h1><p>ON-CHAIN FIRST · PAPER ONLY · SMART CAPITAL v0.2</p></div><div className="account"><b>Equity €{fmt(acct?.equity_eur)}</b><span>Cash €{fmt(acct?.cash_eur)}</span><span>PnL €{fmt(acct?.realized_pnl_eur)}</span><span>Day PnL €{fmt(acct?.daily_realized_pnl_eur)}</span><span>Day spend €{fmt(acct?.daily_spend_eur)}</span><span>Pending {health?.pending_paper_orders??0}</span></div></header>
   {err&&<div className="error">{err}</div>}
   <div className="statusbar"><span>Genesis: <b>{health?.genesis_model_status||'—'}</b></span><span>World: <b>{health?.world_model_status||'—'}</b></span><span>MiroFish: <b>{health?.mirofish_enabled?'ON':'OFF'}</b></span><span>FlyWire: <b>{health?.flywire_enabled?'ON':'OFF'}</b></span><span>FOMO: <b>{health?.fomo_enabled?'ON':'OFF'}</b></span><span>Research feed: <b>{research?.enabled?'ON':research?.fomoscan_configured?'READY':'WAITING KEY'}</b></span><span>Helius: <b>{research?.helius_configured?'READY':'WAITING KEY'}</b></span><span>LIVE: <b>{health?.live_trading?'ON':'OFF'}</b></span></div>
 
