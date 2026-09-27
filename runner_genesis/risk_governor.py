@@ -75,6 +75,24 @@ class RiskGovernor:
                 and (independence_ratio is None or float(independence_ratio) < 0.65)
             ):
                 r.append('WALLET_CLUSTER_CONCENTRATION')
+            cluster_id = f.get('dominant_actor_cluster_id')
+            cluster_fraction = float(f.get('dominant_actor_cluster_fraction', 0.0) or 0.0)
+            if (
+                cluster_id
+                and cluster_id != 'MIXED'
+                and cluster_fraction >= float(self.cfg.min_cluster_fraction_for_exposure)
+            ):
+                cluster_exposure = sum(
+                    float(position.cost_basis_eur)
+                    for position in account.positions.values()
+                    if getattr(position, 'risk_cluster_id', None) == cluster_id
+                )
+                cluster_limit = max(
+                    0.0,
+                    float(account.equity_eur) * float(self.cfg.max_correlated_exposure_pct),
+                )
+                if cluster_exposure + float(p.amount_eur) > cluster_limit + 1e-9:
+                    r.append('MAX_WALLET_CLUSTER_EXPOSURE')
 
         if estimated_slippage_pct > self.cfg.max_slippage_pct:
             r.append('MAX_SLIPPAGE')
