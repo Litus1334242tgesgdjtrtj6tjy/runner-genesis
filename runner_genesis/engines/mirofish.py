@@ -1,28 +1,79 @@
 from __future__ import annotations
 from datetime import datetime
 import hashlib
-import math
 import time
 import numpy as np
 
 
 class MiroFishRolloutEngine:
-    """Local MiroFish-style multi-agent scenario simulator.
+    """Local MiroFish-style scenario simulator.
 
-    This is deliberately an experimental, self-contained stochastic simulator. It does
-    not claim to know the future and does not call an external MiroFish service.
-    Outputs are simulation frequencies, not calibrated probabilities.
+    PAPER/SHADOW may reuse a recent rollout when its driving state barely changed, keeping
+    the deep path cheap during event bursts. BACKTEST/REPLAY should instantiate this engine
+    with deterministic=True so every candidate executes exactly the configured rollout
+    count and wall-clock speed cannot alter research results.
     """
 
-    def __init__(self, cfg) -> None:
+    DRIVER_KEYS = (
+        "weighted_smart_capital_consensus",
+        "smart_money_consensus",
+        "accumulation_score",
+        "top_trader_wave_score",
+        "fomo_score",
+        "smart_capital_retention",
+        "runner_holder_retention",
+        "net_buy_pressure_60s",
+        "launch_integrity_score",
+        "coordinated_dump_risk",
+        "world_smart_wave_score",
+        "effective_wallet_count",
+        "independence_ratio",
+        "cohort_concentration",
+        "same_funder_concentration",
+        "top_trader_independence_ratio",
+        "data_quality_score",
+    )
+
+    def __init__(self, cfg, deterministic: bool = False) -> None:
         self.cfg = cfg
+        self.deterministic = bool(deterministic)
+        self._cache: dict[str, tuple[datetime, tuple[float, ...], dict]] = {}
 
     def _rng(self, mint: str, decision_time: datetime) -> np.random.Generator:
         key = f"{self.cfg.random_seed}|{mint}|{decision_time.isoformat()}"
         seed = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "little")
         return np.random.default_rng(seed)
 
-    def rollouts(self, mint: str, decision_time: datetime, f: dict) -> dict[str, float | str]:
+    @classmethod
+    def _driver_signature(cls, f: dict) -> tuple[float, ...]:
+        values = []
+        for key in cls.DRIVER_KEYS:
+            try:
+                values.append(float(f.get(key, 0.0) or 0.0))
+            except (TypeError, ValueError):
+                values.append(0.0)
+        return tuple(values)
+
+    def _cached_if_stable(self, mint: str, decision_time: datetime, signature: tuple[float, ...]):
+        if self.deterministic:
+            return None
+        cached = self._cache.get(mint)
+        if cached is None:
+            return None
+        previous_time, previous_signature, previous_result = cached
+        dt = (decision_time - previous_time).total_seconds()
+        if dt < 0 or dt > max(0.0, float(self.cfg.min_rerun_seconds)):
+            return None
+        change = max((abs(a - b) for a, b in zip(signature, previous_signature)), default=0.0)
+        if change > max(0.0, float(self.cfg.material_change_threshold)):
+            return None
+        result = dict(previous_result)
+        result["mirofish_cached"] = True
+        result["mirofish_cache_age_seconds"] = max(0.0, dt)
+        result["mirofish_driver_change"] = change
+        return result
+
+    def rollouts(self, mint: str, decision_time: datetime, f: dict) -> dict[str, float | str | bool]:
         if not self.cfg.enabled:
             return {"mirofish_status": "DISABLED"}
         dq = float(f.get("data_quality_score", 0.0) or 0.0)
@@ -48,16 +99,22 @@ class MiroFishRolloutEngine:
                 "mirofish_trigger_fomo": fomo,
             }
 
+        signature = self._driver_signature(f)
+        cached = self._cached_if_stable(mint, decision_time, signature)
+        if cached is not None:
+            return cached
+
         rng = self._rng(mint, decision_time)
         n = max(8, int(self.cfg.num_rollouts))
         steps = max(3, min(30, int(self.cfg.horizon_seconds // 30) or 3))
-        deadline = time.perf_counter() + max(float(self.cfg.rollout_timeout_ms), 1.0) / 1000.0
+        deadline = None if self.deterministic else (
+            time.perf_counter() + max(float(self.cfg.rollout_timeout_ms), 1.0) / 1000.0
+        )
 
         persistence = float(f.get("smart_capital_retention", f.get("runner_holder_retention", 0.0)) or 0.0)
         market = max(-1.0, min(1.0, float(f.get("net_buy_pressure_60s", 0.0) or 0.0)))
         integrity = float(f.get("launch_integrity_score", 0.5) or 0.5)
         dump = float(f.get("coordinated_dump_risk", 0.0) or 0.0)
-        fomo = float(f.get("fomo_score", 0.0) or 0.0)
         world_prior = float(f.get("world_smart_wave_score", 0.0) or 0.0) if self.cfg.use_world_model_prior else 0.0
         effective_wallets = max(0.0, float(f.get("effective_wallet_count", 0.0) or 0.0))
         independence = max(0.0, min(1.0, float(f.get("independence_ratio", 0.0) or 0.0)))
@@ -68,16 +125,12 @@ class MiroFishRolloutEngine:
         independent_breadth = min(1.0, effective_wallets / 4.0) * independence_mix
         coordinated_risk = max(cohort_concentration * (1.0 - independence), same_funder)
 
-        persist_hits = 0
-        distribution_hits = 0
-        collapse_hits = 0
-        elite_hits = 0
-        cohort_hits = 0
+        persist_hits = distribution_hits = collapse_hits = elite_hits = cohort_hits = 0
         returns: list[float] = []
         actual = 0
 
         for _ in range(n):
-            if time.perf_counter() > deadline and actual >= 8:
+            if deadline is not None and time.perf_counter() > deadline and actual >= 8:
                 break
             actual += 1
             capital = 0.47 * consensus + 0.27 * accum + 0.10 * world_prior + 0.16 * independent_breadth
@@ -104,13 +157,8 @@ class MiroFishRolloutEngine:
                     holder = min(1.0, holder + rng.uniform(0.02, 0.12))
                 sell_drive = max(
                     0.0,
-                    0.08
-                    + 0.46 * dump
-                    + 0.20 * distribution
-                    + 0.24 * coordinated_risk
-                    - 0.22 * holder
-                    - 0.12 * capital
-                    - 0.08 * independent_breadth,
+                    0.08 + 0.46 * dump + 0.20 * distribution + 0.24 * coordinated_risk
+                    - 0.22 * holder - 0.12 * capital - 0.08 * independent_breadth,
                 )
                 if rng.random() < min(0.80, sell_drive):
                     distribution = min(1.0, distribution + rng.uniform(0.04, 0.18))
@@ -119,24 +167,18 @@ class MiroFishRolloutEngine:
                     distribution = max(0.0, distribution - rng.uniform(0.00, 0.04))
                 liquidity = max(0.0, min(1.0, liquidity + rng.normal(0.006 * (capital - distribution), 0.025)))
                 holder = max(0.0, min(1.0, holder + 0.04 * (capital - distribution) + rng.normal(0.0, 0.025)))
-                step_ret = 0.055 * capital + 0.035 * holder + 0.02 * market - 0.07 * distribution - 0.05 * (1.0 - liquidity)
-                ret += step_ret + rng.normal(0.0, 0.035)
+                ret += 0.055 * capital + 0.035 * holder + 0.02 * market - 0.07 * distribution - 0.05 * (1.0 - liquidity) + rng.normal(0.0, 0.035)
             returns.append(ret)
-            if holder >= 0.58 and distribution < 0.52:
-                persist_hits += 1
-            if distribution >= 0.62:
-                distribution_hits += 1
-            if liquidity < 0.20 or distribution > 0.84:
-                collapse_hits += 1
-            if elite_arrived:
-                elite_hits += 1
-            if cohort_formed:
-                cohort_hits += 1
+            persist_hits += int(holder >= 0.58 and distribution < 0.52)
+            distribution_hits += int(distribution >= 0.62)
+            collapse_hits += int(liquidity < 0.20 or distribution > 0.84)
+            elite_hits += int(elite_arrived)
+            cohort_hits += int(cohort_formed)
 
         if not actual:
             return {"mirofish_status": "TIMEOUT"}
         arr = np.asarray(returns, dtype=float)
-        return {
+        result = {
             "mirofish_status": "SIMULATION",
             "mirofish_rollouts": float(actual),
             "mirofish_persistence_frequency": persist_hits / actual,
@@ -150,4 +192,9 @@ class MiroFishRolloutEngine:
             "mirofish_data_quality": dq,
             "mirofish_independent_breadth": independent_breadth,
             "mirofish_coordinated_cohort_risk": coordinated_risk,
+            "mirofish_cached": False,
+            "mirofish_deterministic": self.deterministic,
         }
+        if not self.deterministic:
+            self._cache[mint] = (decision_time, signature, dict(result))
+        return result
