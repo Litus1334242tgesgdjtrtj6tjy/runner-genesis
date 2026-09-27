@@ -487,6 +487,12 @@ class SmartCapitalEngine:
             "recent_top1_pnl_share": m7.get("top1_pnl_share"),
             "recent_consistency": m7.get("consistency_score"),
             "recent_repeatability": m7.get("repeatability_score"),
+            # Re-export the 30d qualification context so discovery priority can score a
+            # wallet with one pass instead of recomputing the full 30d window again.
+            "smart_capital_30d_score": m30.get("smart_capital_30d_score"),
+            "data_quality_score": m30.get("data_quality_score"),
+            "wallet_quality_score": m30.get("wallet_quality_score"),
+            "sample_size_30d": m30.get("sample_size"),
         }
 
     def true_smart_capital_30d(self, wallets: list[str], as_of: datetime, store: MarketStateStore, limit: int = 100) -> list[dict[str, Any]]:
