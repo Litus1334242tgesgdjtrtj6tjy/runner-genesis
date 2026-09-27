@@ -350,6 +350,60 @@ class RuntimeRepository:
             s.add(WalletPositionRow(wallet_address=wallet, token_mint=mint, observed_at=observed_at, state=str(payload.get('state') or 'UNKNOWN'), payload_json=_json(payload)))
             s.commit()
 
+    def load_latest_wallet_positions(self, limit: int = 100_000) -> list[dict]:
+        """Return the newest persisted Smart-Capital position snapshot per wallet+mint."""
+        with self.Session() as s:
+            rows = s.execute(
+                select(WalletPositionRow)
+                .order_by(WalletPositionRow.observed_at.desc(), WalletPositionRow.id.desc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            seen: set[tuple[str, str]] = set()
+            out: list[dict] = []
+            for r in rows:
+                key = (r.wallet_address, r.token_mint)
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    payload = json.loads(r.payload_json) if r.payload_json else {}
+                except Exception:
+                    payload = {}
+                out.append({
+                    'wallet_address': r.wallet_address,
+                    'token_mint': r.token_mint,
+                    'observed_at': r.observed_at,
+                    'state': r.state,
+                    'payload': payload,
+                })
+            return out
+
+    def load_latest_smart_states(self, limit: int = 100_000) -> list[dict]:
+        """Return the newest persisted Smart-Capital token state per mint."""
+        with self.Session() as s:
+            rows = s.execute(
+                select(SmartTokenStateRow)
+                .order_by(SmartTokenStateRow.observed_at.desc(), SmartTokenStateRow.id.desc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            seen: set[str] = set()
+            out: list[dict] = []
+            for r in rows:
+                if r.token_mint in seen:
+                    continue
+                seen.add(r.token_mint)
+                try:
+                    payload = json.loads(r.payload_json) if r.payload_json else {}
+                except Exception:
+                    payload = {}
+                out.append({
+                    'token_mint': r.token_mint,
+                    'observed_at': r.observed_at,
+                    'state': r.state,
+                    'payload': payload,
+                })
+            return out
+
     def record_actor_cluster(self, mint: str, observed_at: datetime, payload: dict) -> None:
         with self.Session() as s:
             s.add(ActorClusterRow(token_mint=mint, observed_at=observed_at, payload_json=_json(payload)))
