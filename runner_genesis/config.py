@@ -105,6 +105,7 @@ class PumpDiscoveryConfig(BaseModel):
     kol_enabled: bool = True
     cohort_enabled: bool = True
     max_snapshot_age_seconds: float = 3600.0
+    participant_window_seconds: float = 300.0
 
 
 class PersistenceConfig(BaseModel):
