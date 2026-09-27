@@ -56,7 +56,9 @@ class WalletDiscoveryPriorityEngine:
             return 0.0
         if observed_at.tzinfo is None:
             observed_at = observed_at.replace(tzinfo=timezone.utc)
-        age = max(0.0, (now - observed_at).total_seconds())
+        age = (now - observed_at).total_seconds()
+        if age < 0:
+            return 0.0
         half_life = max(1.0, float(self.cfg.wallet_priority_activity_half_life_seconds))
         return _clip(exp(-age / half_life))
 
@@ -72,7 +74,10 @@ class WalletDiscoveryPriorityEngine:
     ) -> dict[str, Any]:
         smart = smart_metrics or {}
         discovery = discovery_context or {}
-        rank = row.get("rank")
+        # If discovery_context explicitly contains pump_rank, it is the point-in-time
+        # current rank after freshness checks. Never revive a stale/future rank from the
+        # raw registry row.
+        rank = discovery.get("pump_rank") if "pump_rank" in discovery else row.get("rank")
         rank_score = self._rank_score(rank)
         momentum = self._rank_momentum(discovery)
         smart_30d = _clip(float(smart.get("smart_capital_30d_score") or 0.0))
