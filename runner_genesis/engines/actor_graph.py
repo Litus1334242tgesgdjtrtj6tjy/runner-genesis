@@ -50,6 +50,20 @@ class ActorGraphEngine:
                     self._link(prev.wallet, e.wallet, "CO_BUYS", conf, e.timestamp)
             arr.append(e)
 
+    def observe_funding_link(self, wallet: str, funder: str, ts: datetime, confidence: float = 0.90) -> None:
+        """Ingest historical funding evidence without manufacturing a token event."""
+        if not wallet or not funder or wallet == funder:
+            return
+        self.graph.add_node(wallet, kind="wallet")
+        f = f"funder:{funder}"
+        self.graph.add_node(f, kind="funder")
+        self.graph.add_edge(f, wallet, relation="FUNDS", confidence=max(0.0, min(1.0, float(confidence))), last_seen=ts)
+        self.funder_to_wallets[funder].add(wallet)
+        self.wallet_to_funders[wallet].add(funder)
+        for other in self.funder_to_wallets[funder]:
+            if other != wallet:
+                self._link(wallet, other, "SHARES_FUNDER", min(0.95, 0.75 + 0.20 * float(confidence)), ts)
+
     def _link(self, a: str, b: str, relation: str, confidence: float, ts: datetime) -> None:
         if not a or not b or a == b:
             return
