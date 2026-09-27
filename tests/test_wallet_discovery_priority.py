@@ -139,3 +139,52 @@ def test_clan_quality_can_break_otherwise_equal_research_priority():
     )
     assert clan["wallet_discovery_priority_score"] > plain["wallet_discovery_priority_score"]
     assert clan["wallet_discovery_priority_components"]["cohort_quality"] == 0.85
+
+
+
+def test_stale_registry_rank_does_not_boost_current_priority():
+    cfg = ExternalDiscoveryConfig()
+    eng = WalletDiscoveryPriorityEngine(cfg)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    row = {
+        "wallet_address": "STALE_TOP",
+        "rank": 1,
+        "source_confidence": 0.9,
+        "observed_at": now - timedelta(hours=2),
+    }
+    stale = eng.score(
+        row,
+        smart_metrics={},
+        discovery_context={"pump_rank": None, "pump_rank_velocity": 0.0, "pump_rank_acceleration": 0.0},
+        independence_score=1.0,
+        now=now,
+    )
+    fresh = eng.score(
+        {**row, "observed_at": now},
+        smart_metrics={},
+        discovery_context={"pump_rank": 1, "pump_rank_velocity": 0.0, "pump_rank_acceleration": 0.0},
+        independence_score=1.0,
+        now=now,
+    )
+    assert stale["wallet_discovery_priority_components"]["rank"] == 0.0
+    assert fresh["wallet_discovery_priority_components"]["rank"] == 1.0
+    assert fresh["wallet_discovery_priority_score"] > stale["wallet_discovery_priority_score"]
+
+
+def test_future_observed_activity_never_gets_recency_boost():
+    cfg = ExternalDiscoveryConfig()
+    eng = WalletDiscoveryPriorityEngine(cfg)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    out = eng.score(
+        {
+            "wallet_address": "FUTURE",
+            "rank": None,
+            "source_confidence": 0.5,
+            "observed_at": now + timedelta(minutes=5),
+        },
+        smart_metrics={},
+        discovery_context={},
+        independence_score=1.0,
+        now=now,
+    )
+    assert out["wallet_discovery_priority_components"]["recent_activity"] == 0.0
