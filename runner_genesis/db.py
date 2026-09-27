@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from typing import Any
-from sqlalchemy import create_engine, String, Float, Integer, DateTime, Boolean, Text, UniqueConstraint
+from sqlalchemy import create_engine, String, Float, Integer, DateTime, Boolean, Text, UniqueConstraint, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.exc import IntegrityError
 
@@ -53,6 +53,33 @@ class WalletMetricRow(Base):
     wallet_address: Mapped[str] = mapped_column(String(128), index=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload_json: Mapped[str] = mapped_column(Text)
+
+
+class WalletOutcomeRow(Base):
+    __tablename__ = 'wallet_outcomes'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wallet_address: Mapped[str] = mapped_column(String(128), index=True)
+    token_mint: Mapped[str] = mapped_column(String(128), index=True)
+    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    buy_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    realized_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    runner_capture_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hold_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+    __table_args__ = (UniqueConstraint('wallet_address', 'token_mint', 'event_time', 'resolved_at', name='uq_wallet_outcome_cycle'),)
+
+
+class FundingRelationshipRow(Base):
+    __tablename__ = 'funding_relationships'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wallet_address: Mapped[str] = mapped_column(String(128), index=True)
+    funder_address: Mapped[str] = mapped_column(String(128), index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    tx_signature: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+    __table_args__ = (UniqueConstraint('wallet_address', 'funder_address', 'observed_at', 'tx_signature', name='uq_funding_relationship_event'),)
 
 
 class LeaderboardSnapshotRow(Base):
@@ -221,6 +248,72 @@ class RuntimeRepository:
         with self.Session() as s:
             s.add(WalletMetricRow(wallet_address=wallet, observed_at=observed_at, payload_json=_json(payload)))
             s.commit()
+
+    def record_wallet_outcome(self, wallet: str, obs) -> None:
+        with self.Session() as s:
+            s.add(WalletOutcomeRow(
+                wallet_address=wallet,
+                token_mint=obs.token_mint,
+                event_time=obs.event_time,
+                resolved_at=obs.resolved_at,
+                buy_eur=float(obs.buy_eur or 0.0),
+                realized_return=obs.realized_return,
+                runner_capture_ratio=obs.runner_capture_ratio,
+                hold_seconds=obs.hold_seconds,
+                payload_json=_json(obs.__dict__),
+            ))
+            try:
+                s.commit()
+            except IntegrityError:
+                s.rollback()
+
+    def load_wallet_outcomes(self, limit: int = 100_000) -> list[dict]:
+        with self.Session() as s:
+            rows = s.execute(
+                select(WalletOutcomeRow)
+                .order_by(WalletOutcomeRow.resolved_at.asc(), WalletOutcomeRow.id.asc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            return [{
+                'wallet_address': r.wallet_address,
+                'token_mint': r.token_mint,
+                'event_time': r.event_time,
+                'resolved_at': r.resolved_at,
+                'buy_eur': r.buy_eur,
+                'realized_return': r.realized_return,
+                'runner_capture_ratio': r.runner_capture_ratio,
+                'hold_seconds': r.hold_seconds,
+            } for r in rows]
+
+    def record_funding_relationship(self, link) -> None:
+        with self.Session() as s:
+            s.add(FundingRelationshipRow(
+                wallet_address=link.wallet,
+                funder_address=link.funder,
+                observed_at=link.timestamp,
+                confidence=float(link.confidence),
+                tx_signature=link.signature,
+                payload_json=_json(link.__dict__),
+            ))
+            try:
+                s.commit()
+            except IntegrityError:
+                s.rollback()
+
+    def load_funding_relationships(self, limit: int = 100_000) -> list[dict]:
+        with self.Session() as s:
+            rows = s.execute(
+                select(FundingRelationshipRow)
+                .order_by(FundingRelationshipRow.observed_at.asc(), FundingRelationshipRow.id.asc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            return [{
+                'wallet': r.wallet_address,
+                'funder': r.funder_address,
+                'timestamp': r.observed_at,
+                'confidence': r.confidence,
+                'signature': r.tx_signature,
+            } for r in rows]
 
     def record_smart_state(self, mint: str, observed_at: datetime, payload: dict) -> None:
         with self.Session() as s:
