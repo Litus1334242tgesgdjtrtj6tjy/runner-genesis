@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
+from datetime import datetime
 from .ai_trader import TradeProposal, Action
 from .domain.state import PaperAccount, TokenState
 
@@ -15,7 +16,17 @@ class RiskGovernor:
     def __init__(self, cfg):
         self.cfg = cfg
 
-    def evaluate(self, p: TradeProposal, account: PaperAccount, token: TokenState, estimated_slippage_pct: float = 0.0, features: dict | None = None) -> RiskDecision:
+    def evaluate(
+        self,
+        p: TradeProposal,
+        account: PaperAccount,
+        token: TokenState,
+        estimated_slippage_pct: float = 0.0,
+        features: dict | None = None,
+        now: datetime | None = None,
+    ) -> RiskDecision:
+        if now is not None:
+            account.advance_accounting_day(now)
         f = features or {}
         r: list[str] = []
         if self.cfg.kill_switch:
@@ -70,6 +81,6 @@ class RiskGovernor:
         dd = (account.peak_equity_eur - account.equity_eur) / max(account.peak_equity_eur, 1e-9)
         if dd > self.cfg.max_portfolio_drawdown_pct:
             r.append('MAX_DRAWDOWN')
-        if account.realized_pnl_eur < -self.cfg.max_daily_loss_eur:
+        if account.daily_realized_pnl_eur < -self.cfg.max_daily_loss_eur:
             r.append('MAX_DAILY_LOSS')
         return RiskDecision(not r, p, r)
