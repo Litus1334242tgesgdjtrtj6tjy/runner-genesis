@@ -59,6 +59,13 @@ class MiroFishRolloutEngine:
         dump = float(f.get("coordinated_dump_risk", 0.0) or 0.0)
         fomo = float(f.get("fomo_score", 0.0) or 0.0)
         world_prior = float(f.get("world_smart_wave_score", 0.0) or 0.0) if self.cfg.use_world_model_prior else 0.0
+        effective_wallets = max(0.0, float(f.get("effective_wallet_count", 0.0) or 0.0))
+        independence = max(0.0, min(1.0, float(f.get("independence_ratio", 0.0) or 0.0)))
+        cohort_concentration = max(0.0, min(1.0, float(f.get("cohort_concentration", 0.0) or 0.0)))
+        same_funder = max(0.0, min(1.0, float(f.get("same_funder_concentration", 0.0) or 0.0)))
+        top_independence = max(0.0, min(1.0, float(f.get("top_trader_independence_ratio", 0.0) or 0.0)))
+        independent_breadth = min(1.0, effective_wallets / 4.0) * max(independence, top_independence)
+        coordinated_risk = max(cohort_concentration * (1.0 - independence), same_funder)
 
         persist_hits = 0
         distribution_hits = 0
@@ -72,22 +79,38 @@ class MiroFishRolloutEngine:
             if time.perf_counter() > deadline and actual >= 8:
                 break
             actual += 1
-            capital = 0.55 * consensus + 0.35 * accum + 0.10 * world_prior
+            capital = 0.47 * consensus + 0.27 * accum + 0.10 * world_prior + 0.16 * independent_breadth
             holder = persistence
             liquidity = 0.45 + 0.45 * integrity
-            distribution = dump * 0.55
+            distribution = min(1.0, dump * 0.55 + 0.25 * coordinated_risk)
             ret = 0.0
             elite_arrived = False
             cohort_formed = False
             for _step in range(steps):
-                arrival_drive = 0.22 * capital + 0.12 * max(market, 0.0) + 0.10 * fomo + 0.08 * world_prior
+                arrival_drive = (
+                    0.20 * capital
+                    + 0.12 * max(market, 0.0)
+                    + 0.09 * fomo
+                    + 0.08 * world_prior
+                    + 0.11 * independent_breadth
+                    - 0.10 * coordinated_risk
+                )
                 if rng.random() < max(0.01, min(0.65, 0.05 + arrival_drive)):
                     capital = min(1.0, capital + rng.uniform(0.03, 0.16))
                     elite_arrived = elite_arrived or rng.random() < (0.25 + 0.45 * consensus)
-                if rng.random() < max(0.01, min(0.55, 0.03 + 0.35 * capital * integrity)):
+                if rng.random() < max(0.01, min(0.55, 0.03 + 0.28 * capital * integrity + 0.18 * independent_breadth)):
                     cohort_formed = True
                     holder = min(1.0, holder + rng.uniform(0.02, 0.12))
-                sell_drive = max(0.0, 0.08 + 0.50 * dump + 0.20 * distribution - 0.22 * holder - 0.12 * capital)
+                sell_drive = max(
+                    0.0,
+                    0.08
+                    + 0.46 * dump
+                    + 0.20 * distribution
+                    + 0.24 * coordinated_risk
+                    - 0.22 * holder
+                    - 0.12 * capital
+                    - 0.08 * independent_breadth,
+                )
                 if rng.random() < min(0.80, sell_drive):
                     distribution = min(1.0, distribution + rng.uniform(0.04, 0.18))
                     capital = max(0.0, capital - rng.uniform(0.02, 0.12))
@@ -124,4 +147,6 @@ class MiroFishRolloutEngine:
             "mirofish_downside_proxy": float(np.quantile(arr, 0.10)),
             "mirofish_dispersion": float(arr.std()),
             "mirofish_data_quality": dq,
+            "mirofish_independent_breadth": independent_breadth,
+            "mirofish_coordinated_cohort_risk": coordinated_risk,
         }
