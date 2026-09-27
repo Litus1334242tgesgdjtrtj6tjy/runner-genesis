@@ -68,6 +68,10 @@ class PumpFeeSchedule:
 
     def quote(self, token) -> FeeQuote:
         meta = dict(getattr(token, "metadata", {}) or {})
+        events = getattr(token, "events", None) or []
+        if events:
+            latest_meta = dict(getattr(events[-1], "metadata", {}) or {})
+            meta.update({k: v for k, v in latest_meta.items() if v is not None})
         if not self._pump_context(meta):
             return FeeQuote(None, "UNKNOWN_OR_NON_PUMP", self.VERSION, 0.0, "NO_EXPLICIT_PUMP_CONTEXT")
 
