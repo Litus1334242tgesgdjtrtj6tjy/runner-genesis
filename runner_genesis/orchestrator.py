@@ -317,10 +317,33 @@ class RunnerGenesisOmega:
                     )
         return fill, rd.approved, rd.reasons
 
-    def _execute_due_pending(self, mint: str, now: datetime, token, features: dict) -> tuple[PaperFill | None, list[str]]:
+    def _execute_due_pending(
+        self,
+        mint: str,
+        now: datetime,
+        token,
+        features: dict,
+        market_event: MarketEvent | None = None,
+    ) -> tuple[PaperFill | None, list[str]]:
         pending = self.pending_orders.get(mint)
         if pending is None or now < pending.due_time:
             return None, []
+
+        # A delayed entry must use a quote explicitly observed on the current verified
+        # event. TokenState may still contain an older cached price/liquidity value.
+        if market_event is not None:
+            fresh_quote = (
+                market_event.token_mint == mint
+                and bool(market_event.asset_match_verified)
+                and market_event.timestamp >= pending.due_time
+                and market_event.price_usd is not None
+                and float(market_event.price_usd) > 0
+                and market_event.liquidity_usd is not None
+                and float(market_event.liquidity_usd) > 0
+            )
+            if not fresh_quote:
+                return None, ['WAITING_FRESH_EXECUTION_QUOTE']
+
         del self.pending_orders[mint]
         if str(features.get('entry_validity')) != 'VALID':
             if self.repository:
@@ -436,7 +459,9 @@ class RunnerGenesisOmega:
 
         # A previously confirmed ENTER/ADD is executed at the first verified market event
         # at or after the configured delay, never at the signal-time price.
-        due_fill, due_reasons = self._execute_due_pending(e.token_mint, e.timestamp, token, f)
+        due_fill, due_reasons = self._execute_due_pending(
+            e.token_mint, e.timestamp, token, f, market_event=e
+        )
 
         pos = self.portfolio.account.positions.get(e.token_mint)
         has_pos = pos is not None
