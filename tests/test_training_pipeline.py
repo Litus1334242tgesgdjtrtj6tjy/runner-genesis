@@ -28,6 +28,7 @@ def test_future_labels_use_delayed_executable_entry_and_future_only():
         {"timestamp": t0 + timedelta(minutes=10), "price_usd": 2.2, "liquidity_usd": 100_000},
         {"timestamp": t0 + timedelta(minutes=20), "price_usd": 3.2, "liquidity_usd": 100_000},
         {"timestamp": t0 + timedelta(minutes=50), "price_usd": 5.5, "liquidity_usd": 100_000},
+        {"timestamp": t0 + timedelta(minutes=60), "price_usd": 3.0, "liquidity_usd": 100_000},
     ]
     labels = _future_labels(
         observations,
@@ -42,6 +43,8 @@ def test_future_labels_use_delayed_executable_entry_and_future_only():
     assert labels["y_x2_15m"] == 1
     assert labels["y_x3_30m"] == 1
     assert labels["y_x5_60m"] == 1
+    assert labels["fixed_exit_net_return_60m"] is not None
+    assert labels["fixed_exit_net_return_60m"] > 1.0
 
 
 def test_chronological_training_writes_loadable_calibrated_artifact(tmp_path):
