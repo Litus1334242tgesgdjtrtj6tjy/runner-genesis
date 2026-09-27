@@ -94,3 +94,19 @@ def test_partial_sell_respects_liquidity_without_overselling_tokens():
     assert fill is not None and fill.partial
     assert abs(fill.quantity-1.0) < 1e-12
     assert fill.quantity <= 100.0
+
+
+
+def test_portfolio_rejects_unaffordable_fill_without_recording_it():
+    ledger=PortfolioLedger(10.0)
+    now=datetime(2026,1,1,tzinfo=timezone.utc)
+    fill=PaperFill(
+        token_mint='M', side='BUY', requested_eur=10.0, filled_eur=10.0,
+        quantity=10.0, reference_price=1.0, execution_price=1.0,
+        slippage_pct=0.0, fees_eur=1.0, latency_ms=0.0,
+        failed=False, partial=False, timestamp=now,
+    )
+    assert ledger.apply_fill(fill) is False
+    assert ledger.fills == []
+    assert ledger.account.cash_eur == 10.0
+    assert 'M' not in ledger.account.positions
