@@ -6,6 +6,10 @@ from runner_genesis.domain.state import WalletBuyObservation
 from runner_genesis.ingestion.helius_history import FundingLink
 from runner_genesis.execution import PaperFill
 from runner_genesis.orchestrator import RunnerGenesisOmega
+from runner_genesis.research_sync import ResearchSyncCoordinator
+from runner_genesis.engines.discovery import PumpDiscoveryEngine
+from runner_genesis.config import PumpDiscoveryConfig
+from types import SimpleNamespace
 
 
 def test_persisted_wallet_outcomes_and_funding_graph_hydrate_after_restart(tmp_path):
@@ -168,3 +172,47 @@ def test_persisted_fill_prevents_duplicate_pending_restore(tmp_path):
 
     assert "MINT_DONE" not in engine.pending_orders
     assert "MINT_DONE" in engine.portfolio.account.positions
+
+
+
+def test_wallet_backfill_cooldown_persists_across_coordinator_restart(tmp_path):
+    db = tmp_path / "wallet_backfill_status.db"
+    url = f"sqlite:///{db}"
+    repo = RuntimeRepository(url)
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    repo.record_wallet_backfill_status(
+        "W_COOLDOWN",
+        t0,
+        {
+            "transactions": 100,
+            "swap_events": 12,
+            "resolved_outcomes": 4,
+        },
+    )
+
+    settings = Settings(database_url=url, helius_api_key="test-key")
+    settings.external_discovery.fomoscan_enabled = False
+    engine = SimpleNamespace(
+        repository=repo,
+        discovery=PumpDiscoveryEngine(PumpDiscoveryConfig()),
+    )
+    first = ResearchSyncCoordinator(settings, engine)
+    second = ResearchSyncCoordinator(settings, engine)
+
+    assert first._last_backfill["W_COOLDOWN"] == t0
+    assert second._last_backfill["W_COOLDOWN"] == t0
+    assert "W_COOLDOWN" in second._seen_wallets
+
+    repo.record_wallet_backfill_status(
+        "W_COOLDOWN",
+        t0.replace(hour=2),
+        {
+            "transactions": 125,
+            "swap_events": 20,
+            "resolved_outcomes": 6,
+        },
+    )
+    rows = repo.load_wallet_backfill_status()
+    assert len(rows) == 1
+    assert rows[0]["transactions"] == 125
+    assert rows[0]["resolved_outcomes"] == 6
