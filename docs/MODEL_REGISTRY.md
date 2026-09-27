@@ -1,12 +1,22 @@
 # Model Registry
 
-| Component | Current status | Default | Notes |
+| Component | Status | PAPER config | Interpretation |
 |---|---|---:|---|
-| Runner Genesis | UNTRAINED unless artifact exists | ON | Heuristic emits `genesis_score`, not fake probabilities |
-| World Model | UNTRAINED unless artifact exists | ON | Heuristic outputs named `*_score` |
-| MiroFish rollout | EXPERIMENTAL | OFF | Simulation frequencies/proxies only |
-| FlyWire reservoir | EXPERIMENTAL | OFF | Must beat randomized controls OOS |
+| Runner Genesis | UNTRAINED unless artifact exists | ON | Heuristic research score; calibrated probabilities stay N/A |
+| Smart Capital | RESEARCH HEURISTIC | ON | Quality/strategy/conviction/accumulation/independence |
+| Multi-Brain Fusion | RESEARCH HEURISTIC | ON | Reliability-aware fused research score, not probability |
+| World Model | UNTRAINED unless artifact exists | ON | Future-state scores |
+| MiroFish-style rollout | EXPERIMENTAL | ON, gated | Local scenario simulation; only meaningful candidates trigger |
+| FlyWire FAFB reservoir | EXPERIMENTAL | ON | Fixed sparse reservoir; randomized controls required |
+| FOMO context | EXPERIMENTAL CONTEXT | ON | Requires observations/provider; cannot trigger entry alone |
+| Pump discovery | DISCOVERY | ON | Top-wallet/KOL context; on-chain qualification mandatory |
 | Quantum-inspired graph | EXPERIMENTAL | OFF | Classical controls required |
-| Hawkes cascade | RESEARCH FEATURE | ON | No independent alpha claim |
-| Smart Capital consensus | HEURISTIC/RESEARCH | ON | Requires historical wallet data for confidence |
-| Launch Integrity | HEURISTIC/RESEARCH | ON | Evidence score, not legal/fraud classification |
+| Hawkes cascade | RESEARCH FEATURE | ON | Self-excitation/cascade state, no independent alpha claim |
+| Launch Integrity | RESEARCH RISK | ON | Manipulation/dump/sellability evidence, not fraud classification |
+| Runner Persistence | RESEARCH HEURISTIC | ON | Hold/distribution state |
+| Risk Governor | RULE ENGINE | ON | Final authority over PAPER entry/position actions |
+
+Promotion states are distinct:
+IMPLEMENTED → TESTED → OOS VALIDATED → SHADOW VALIDATED → PAPER PROMOTED.
+
+No experimental brain is considered promoted merely because it is enabled for PAPER research.
