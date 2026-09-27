@@ -472,16 +472,40 @@ class SmartCapitalEngine:
         ]
         stats = self._window_stats(observations)
         full = self.wallet_metrics(wallet, as_of, store)
-        quality = float(full.get("wallet_quality_score") or 0.0)
-        swing = float(full.get("swing_score") or 0.0)
-        hold = float(full.get("hold_score") or 0.0)
+
         consistency = float(stats.get("consistency_score") or 0.0)
         repeatability = float(stats.get("repeatability_score") or 0.0)
         diversification = float(stats.get("diversification_score") or 0.0)
         dd = float(stats.get("max_drawdown") or 0.0)
         sample_quality = _clip(float(stats["sample_size"]) / 20.0)
+        quality_sample = _clip(
+            float(stats["sample_size"]) / max(float(self.cfg.quality_sample_target), 1.0)
+        )
+        median_roi = float(stats.get("median_roi") or 0.0)
+        realized_quality = _clip(0.5 + median_roi / 2.0)
+        pf = stats.get("profit_factor")
+        pf_score = (
+            _clip(float(pf) / 2.0)
+            if pf is not None
+            else (0.5 if stats["sample_size"] else 0.0)
+        )
+        window_quality_raw = (
+            0.25 * consistency
+            + 0.20 * realized_quality
+            + 0.15 * pf_score
+            + 0.15 * repeatability
+            + 0.10 * (1.0 - dd)
+            + 0.10 * diversification
+            + 0.05 * quality_sample
+        )
+        window_quality = _clip(window_quality_raw * quality_sample)
+
+        winner_hold = float(stats.get("median_winner_hold_seconds") or 0.0)
+        swing = _clip(winner_hold / (2 * 3600.0)) if winner_hold > 0 else 0.0
+        hold = _clip(winner_hold / (6 * 3600.0)) if winner_hold > 0 else 0.0
+
         smart_30d_score = _clip(
-            0.25 * quality
+            0.25 * window_quality
             + 0.18 * consistency
             + 0.17 * repeatability
             + 0.12 * diversification
@@ -494,8 +518,13 @@ class SmartCapitalEngine:
             **full,
             **stats,
             "window_days": int(days),
+            "window_wallet_quality_score": window_quality,
+            "window_swing_score": swing,
+            "window_hold_score": hold,
             "smart_capital_30d_score": smart_30d_score,
-            "data_quality_score": _clip(0.55 * sample_quality + 0.45 * float(full.get("confidence") or 0.0)),
+            "data_quality_score": _clip(
+                0.55 * sample_quality + 0.45 * quality_sample
+            ),
         }
 
     def emerging_wallet_metrics(self, wallet: str, as_of: datetime, store: MarketStateStore) -> dict[str, Any]:
@@ -530,8 +559,8 @@ class SmartCapitalEngine:
             "smart_capital_30d_score": m30.get("smart_capital_30d_score"),
             "data_quality_score": m30.get("data_quality_score"),
             "wallet_quality_score": m30.get("wallet_quality_score"),
-            "swing_score_30d": m30.get("swing_score"),
-            "hold_score_30d": m30.get("hold_score"),
+            "swing_score_30d": m30.get("window_swing_score"),
+            "hold_score_30d": m30.get("window_hold_score"),
             "sample_size_30d": m30.get("sample_size"),
         }
 
