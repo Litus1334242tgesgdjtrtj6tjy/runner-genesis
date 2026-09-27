@@ -245,21 +245,60 @@ class ResearchSyncCoordinator:
         fully_scored = []
         store = getattr(self.engine, "store", None)
         smart_engine = getattr(self.engine, "smart", None)
+        contexts: dict[str, dict[str, Any]] = {}
+        smart_by_wallet: dict[str, dict[str, Any]] = {}
+        independence_by_wallet: dict[str, float] = {}
+
         for row in pool:
             wallet = str(row.get("wallet_address") or "").strip()
-            context = self.engine.discovery.wallet_context(wallet, now)
-            smart_metrics = {}
+            contexts[wallet] = self.engine.discovery.wallet_context(wallet, now)
+            smart_metrics: dict[str, Any] = {}
             if store is not None and smart_engine is not None:
                 try:
                     smart_metrics = smart_engine.emerging_wallet_metrics(wallet, now, store)
                 except Exception:
                     smart_metrics = {}
-            independence = self._priority_independence(wallet, peer_wallets)
+            smart_by_wallet[wallet] = smart_metrics
+            independence_by_wallet[wallet] = self._priority_independence(wallet, peer_wallets)
+
+        cohort_quality: dict[str, float] = {}
+        cohort_engine = getattr(self.engine, "cohorts", None)
+        actor = getattr(self.engine, "actor", None)
+        if cohort_engine is not None and actor is not None:
+            cohort_metrics = {
+                wallet: {
+                    "wallet_quality_score": metrics.get("wallet_quality_score"),
+                    "swing_score": metrics.get("swing_score_30d"),
+                    "hold_score": metrics.get("hold_score_30d"),
+                }
+                for wallet, metrics in smart_by_wallet.items()
+            }
+            try:
+                cohort_rows = cohort_engine.discover(
+                    actor,
+                    cohort_metrics,
+                    now,
+                    min_size=2,
+                    limit=max(100, len(pool) * 2),
+                )
+            except Exception:
+                cohort_rows = []
+            peer_set = set(peer_wallets)
+            for cohort in cohort_rows:
+                score = max(0.0, min(1.0, float(cohort.get("cohort_score") or 0.0)))
+                for member in cohort.get("members") or []:
+                    if member in peer_set:
+                        cohort_quality[member] = max(cohort_quality.get(member, 0.0), score)
+
+        for row in pool:
+            wallet = str(row.get("wallet_address") or "").strip()
+            smart_metrics = smart_by_wallet.get(wallet, {})
             scored = self.wallet_priority.score(
                 row,
                 smart_metrics=smart_metrics,
-                discovery_context=context,
-                independence_score=independence,
+                discovery_context=contexts.get(wallet, {}),
+                independence_score=independence_by_wallet.get(wallet, 1.0),
+                cohort_quality=cohort_quality.get(wallet, 0.0),
                 now=now,
             )
             row.update(scored)
@@ -268,6 +307,7 @@ class ResearchSyncCoordinator:
                 "emerging_smart_wallet_score": smart_metrics.get("emerging_smart_wallet_score"),
                 "data_quality_score": smart_metrics.get("data_quality_score"),
                 "sample_size_30d": smart_metrics.get("sample_size_30d"),
+                "cohort_quality": cohort_quality.get(wallet, 0.0),
             }
             fully_scored.append(row)
 
