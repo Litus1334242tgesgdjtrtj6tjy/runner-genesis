@@ -93,6 +93,7 @@ class MiroFishConfig(BaseModel):
     trigger_min_accumulation: float = 0.20
     trigger_min_top_trader_wave: float = 0.20
     trigger_min_fomo: float = 0.30
+    trigger_min_early_formation: float = 0.45
     min_rerun_seconds: float = 20.0
     material_change_threshold: float = 0.08
 
