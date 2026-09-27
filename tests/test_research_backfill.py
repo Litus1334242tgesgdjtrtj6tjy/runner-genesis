@@ -114,3 +114,8 @@ def test_backfill_wallet_observations_is_deduplicated_and_point_in_time():
     as_of_after = datetime.fromtimestamp(1_700_000_700, tz=timezone.utc)
     assert store.resolved_wallet_history_as_of(WALLET, as_of_before) == []
     assert len(store.resolved_wallet_history_as_of(WALLET, as_of_after)) == 1
+
+
+def test_swap_proceeds_are_not_funding_links():
+    n = EnhancedWalletHistoryNormalizer()
+    assert n.funding_links(WALLET, _swap_sell()) == []
