@@ -1,0 +1,38 @@
+{
+  "FLY_SHUFFLED_WEIGHTS": {
+    "path": "fly_shuffled_weights.npz",
+    "nodes": 5000,
+    "edges": 205295,
+    "weight_sum": 6370841.0,
+    "mean_abs_out_degree_delta": 0.0,
+    "mean_abs_in_degree_delta": 0.0,
+    "seed": 783
+  },
+  "FLY_REWIRED": {
+    "path": "fly_rewired.npz",
+    "nodes": 5000,
+    "edges": 203195,
+    "weight_sum": 6370841.0,
+    "mean_abs_out_degree_delta": 0.42,
+    "mean_abs_in_degree_delta": 0.42,
+    "seed": 783
+  },
+  "FLY_DEGREE_PRESERVED": {
+    "path": "fly_degree_preserved.npz",
+    "nodes": 5000,
+    "edges": 203234,
+    "weight_sum": 6370841.0,
+    "mean_abs_out_degree_delta": 0.4122,
+    "mean_abs_in_degree_delta": 0.4122,
+    "seed": 783
+  },
+  "RANDOM_RESERVOIR": {
+    "path": "random_reservoir.npz",
+    "nodes": 5000,
+    "edges": 204470,
+    "weight_sum": 6349024.0,
+    "mean_abs_out_degree_delta": 22.9514,
+    "mean_abs_in_degree_delta": 23.8622,
+    "seed": 783
+  }
+}

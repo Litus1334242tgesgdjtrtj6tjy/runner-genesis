@@ -1,0 +1,13 @@
+{
+  "source": "connections_princeton.csv.gz",
+  "source_sha256": "445f996bf6c4b1803b9ba186189138a3061ff8623aa94c0abcf38af30a5bd48b",
+  "connectome_version": "FAFB/FlyWire public release 783",
+  "min_syn_count": 5,
+  "max_nodes": 5000,
+  "node_count": 5000,
+  "edge_count": 205295,
+  "input_rows_after_threshold": 3754052,
+  "kept_rows_before_collapse": 274957,
+  "weight_sum": 6370841.0,
+  "preprocessing": "top weighted-degree induced subgraph"
+}

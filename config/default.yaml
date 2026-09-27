@@ -1,0 +1,72 @@
+mode: PAPER
+live_trading: false
+paper_starting_capital_eur: 300.0
+currency: EUR
+
+features:
+  social_enabled: false
+  flywire:
+    enabled: false
+    artifact_dir: ./artifacts/flywire
+    state_dim: 64
+    alpha: 0.90
+    variant: FLY_REAL
+  quantum_graph:
+    enabled: false
+    max_nodes: 128
+  flow_dynamics:
+    enabled: true
+  jump_sde:
+    enabled: true
+    state_dim: 32
+  hawkes:
+    enabled: true
+    half_life_seconds: 25.0
+  hypergraph:
+    enabled: true
+  world_model:
+    enabled: true
+    model_path: ./artifacts/models/world_model.joblib
+  genesis_model:
+    model_path: ./artifacts/models/genesis_model.joblib
+
+risk:
+  max_position_eur: 25.0
+  max_account_pct_per_trade: 0.08
+  max_simultaneous_positions: 4
+  max_daily_loss_eur: 30.0
+  max_portfolio_drawdown_pct: 0.20
+  max_daily_spend_eur: 120.0
+  max_slippage_pct: 0.12
+  min_liquidity_usd: 10000.0
+  max_dev_holdings_pct: 0.12
+  max_sniper_pct: 0.30
+  max_bundle_pct: 0.30
+  max_suspected_related_concentration_pct: 0.35
+  max_correlated_exposure_pct: 0.35
+  kill_switch: false
+
+execution:
+  latency_ms_mean: 1100
+  latency_ms_std: 250
+  base_fee_bps: 35
+  priority_fee_bps: 10
+  mev_adverse_bps: 20
+  base_slippage_bps: 35
+  impact_coefficient: 1.25
+  max_liquidity_fraction: 0.02
+  failed_tx_base_probability: 0.015
+  partial_fill_enabled: true
+
+trader:
+  min_genesis_to_watch: 0.55
+  min_entry_edge: 0.025
+  min_hold_score: 0.52
+  reduce_below_hold_score: 0.42
+  exit_below_hold_score: 0.28
+  moonbag_fraction: 0.15
+  max_adds_per_position: 2
+  default_position_eur: 10.0
+
+point_in_time:
+  strict: true
