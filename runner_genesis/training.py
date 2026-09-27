@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 import joblib
 import numpy as np
@@ -24,6 +25,7 @@ from sklearn.preprocessing import StandardScaler
 
 from .db import EventRow, DecisionRow
 from .engines.genesis import FEATURE_ORDER
+from .fees import PumpFeeSchedule
 
 
 TARGETS = {
@@ -100,11 +102,21 @@ def _event_observation(row: EventRow) -> dict[str, Any] | None:
         return None
     if price is None or liquidity is None or price <= 0 or liquidity <= 0:
         return None
+    meta = dict(payload.get("metadata") or {})
+    synthetic = SimpleNamespace(
+        metadata=meta,
+        events=[],
+        migration_at=_aware(row.timestamp) if str(payload.get("event_type") or "") == "MIGRATION" else None,
+        market_cap_usd=payload.get("market_cap_usd"),
+    )
+    fee_quote = PumpFeeSchedule().quote(synthetic)
     return {
         "timestamp": _aware(row.timestamp),
         "price_usd": price,
         "liquidity_usd": liquidity,
         "event_id": row.event_id,
+        "protocol_fee_bps": fee_quote.protocol_fee_bps,
+        "fee_source": fee_quote.source,
     }
 
 
@@ -126,8 +138,11 @@ def _roundtrip_return(entry: dict[str, Any], exit_obs: dict[str, Any], requested
     if max_slippage_pct is not None and entry_slip > float(max_slippage_pct):
         return None
     buy_price = float(entry["price_usd"]) * (1.0 + entry_slip)
-    fee_rate = (float(execution_cfg.base_fee_bps) + float(execution_cfg.priority_fee_bps)) / 10000.0
-    entry_fee = filled * fee_rate
+    entry_protocol_bps = entry.get("protocol_fee_bps")
+    if entry_protocol_bps is None:
+        entry_protocol_bps = float(execution_cfg.base_fee_bps)
+    entry_fee_rate = (float(entry_protocol_bps) + float(execution_cfg.priority_fee_bps)) / 10000.0
+    entry_fee = filled * entry_fee_rate
     quantity = filled / max(buy_price, 1e-12)
 
     ref_exit_notional = quantity * float(exit_obs["price_usd"])
@@ -143,7 +158,11 @@ def _roundtrip_return(entry: dict[str, Any], exit_obs: dict[str, Any], requested
         return None
     sell_price = float(exit_obs["price_usd"]) * max(0.0, 1.0 - exit_slip)
     proceeds = qty_exit * sell_price
-    exit_fee = proceeds * fee_rate
+    exit_protocol_bps = exit_obs.get("protocol_fee_bps")
+    if exit_protocol_bps is None:
+        exit_protocol_bps = float(execution_cfg.base_fee_bps)
+    exit_fee_rate = (float(exit_protocol_bps) + float(execution_cfg.priority_fee_bps)) / 10000.0
+    exit_fee = proceeds * exit_fee_rate
 
     # Compare like-for-like capital if only a partial exit is executable.
     allocated_entry_cost = (filled + entry_fee) * executable_fraction
@@ -175,6 +194,8 @@ def _future_labels(
         "label_entry_time": entry["timestamp"],
         "label_entry_price": entry["price_usd"],
         "label_entry_liquidity": entry["liquidity_usd"],
+        "label_entry_protocol_fee_bps": entry.get("protocol_fee_bps"),
+        "label_entry_fee_source": entry.get("fee_source"),
     }
     horizon_returns: dict[int, list[float]] = {}
     horizon_exec_sizes: dict[int, list[float]] = {}
