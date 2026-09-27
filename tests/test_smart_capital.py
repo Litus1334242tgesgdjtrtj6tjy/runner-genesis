@@ -248,3 +248,45 @@ def test_historical_smart_capital_ignores_orphan_sell_and_dedupes_events():
     assert p.sold_token == 40.0
     assert abs(p.retained_fraction - 0.60) < 1e-12
     assert p.event_ids == ['hist-buy', 'hist-sell']
+
+
+
+def test_smart_30d_score_is_not_boosted_by_old_resolved_wins():
+    now = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    store = MarketStateStore()
+    smart = SmartCapitalEngine(
+        SmartCapitalConfig(),
+        WalletQualityEngine(),
+        PumpDiscoveryEngine(PumpDiscoveryConfig()),
+    )
+    recent = [
+        WalletBuyObservation(
+            event_time=now-timedelta(days=10-i),
+            resolved_at=now-timedelta(days=9-i),
+            token_mint=f'R{i}',
+            buy_eur=100,
+            realized_return=0.10 if i % 2 == 0 else -0.05,
+            runner_capture_ratio=None,
+            hold_seconds=3600,
+        )
+        for i in range(8)
+    ]
+    for obs in recent:
+        store.resolve_wallet_observation('WITH_OLD', obs)
+        store.resolve_wallet_observation('RECENT_ONLY', WalletBuyObservation(**obs.__dict__))
+    for i in range(30):
+        store.resolve_wallet_observation('WITH_OLD', WalletBuyObservation(
+            event_time=now-timedelta(days=100+i),
+            resolved_at=now-timedelta(days=60+i),
+            token_mint=f'OLD{i}',
+            buy_eur=100,
+            realized_return=5.0,
+            runner_capture_ratio=0.9,
+            hold_seconds=12*3600,
+        ))
+
+    with_old = smart.wallet_metrics_window('WITH_OLD', now, store, 30)
+    recent_only = smart.wallet_metrics_window('RECENT_ONLY', now, store, 30)
+    assert with_old['sample_size'] == recent_only['sample_size'] == 8
+    assert abs(with_old['smart_capital_30d_score'] - recent_only['smart_capital_30d_score']) < 1e-12
+    assert abs(with_old['window_wallet_quality_score'] - recent_only['window_wallet_quality_score']) < 1e-12
