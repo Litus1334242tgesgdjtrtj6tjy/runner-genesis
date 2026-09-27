@@ -41,47 +41,51 @@ async def run_shadow(settings: Settings, programs: list[str] | None = None):
     norm = HeliusOnChainNormalizer()
     enrich = DexScreenerEnricher()
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        # Fail early with a useful message if RUN_PAPER is not running.
-        try:
-            health = await client.get(f"{api_url.rstrip('/')}/health")
-            health.raise_for_status()
-        except Exception as exc:
-            raise RuntimeError(
-                f'RUN_PAPER/API is not reachable at {api_url}. Start scripts\\RUN_PAPER.bat first.'
-            ) from exc
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Fail early with a useful message if RUN_PAPER is not running.
+            try:
+                health = await client.get(f"{api_url.rstrip('/')}/health")
+                health.raise_for_status()
+            except Exception as exc:
+                raise RuntimeError(
+                    f'RUN_PAPER/API is not reachable at {api_url}. Start scripts\\RUN_PAPER.bat first.'
+                ) from exc
 
-        print(json.dumps({
-            'status': 'shadow_connected_to_paper_api',
-            'api_url': api_url,
-            'live_trading': False,
-            'programs': programs or [PUMP_PROGRAM, PUMPSWAP_PROGRAM],
-        }), flush=True)
+            print(json.dumps({
+                'status': 'shadow_connected_to_paper_api',
+                'api_url': api_url,
+                'live_trading': False,
+                'programs': programs or [PUMP_PROGRAM, PUMPSWAP_PROGRAM],
+            }), flush=True)
 
-        async for payload in sub.payloads():
-            for event in norm.normalize(payload):
-                event = await enrich.enrich(event)
-                try:
-                    result = await _post_event(client, api_url, event)
-                except Exception as exc:
+            async for payload in sub.payloads():
+                for event in norm.normalize(payload):
+                    event = await enrich.enrich(event)
+                    try:
+                        result = await _post_event(client, api_url, event)
+                    except Exception as exc:
+                        print(json.dumps({
+                            'status': 'paper_api_post_error',
+                            'error': type(exc).__name__,
+                            'mint': event.token_mint,
+                        }), flush=True)
+                        continue
+
+                    snapshot = result.get('snapshot') or {}
+                    probs = snapshot.get('probabilities') or {}
+                    features = snapshot.get('features') or {}
+                    fill = result.get('fill')
                     print(json.dumps({
-                        'status': 'paper_api_post_error',
-                        'error': type(exc).__name__,
+                        'time': event.timestamp.isoformat(),
                         'mint': event.token_mint,
-                    }), flush=True)
-                    continue
+                        'event': event.event_type.value,
+                        'action': snapshot.get('action'),
+                        'genesis': probs.get('genesis_prob'),
+                        'edge': features.get('expected_executable_edge'),
+                        'risk_reasons': result.get('risk_reasons') or [],
+                        'paper_fill': fill,
+                    }, separators=(',', ':')), flush=True)
+    finally:
+        await enrich.aclose()
 
-                snapshot = result.get('snapshot') or {}
-                probs = snapshot.get('probabilities') or {}
-                features = snapshot.get('features') or {}
-                fill = result.get('fill')
-                print(json.dumps({
-                    'time': event.timestamp.isoformat(),
-                    'mint': event.token_mint,
-                    'event': event.event_type.value,
-                    'action': snapshot.get('action'),
-                    'genesis': probs.get('genesis_prob'),
-                    'edge': features.get('expected_executable_edge'),
-                    'risk_reasons': result.get('risk_reasons') or [],
-                    'paper_fill': fill,
-                }, separators=(',', ':')), flush=True)
