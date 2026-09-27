@@ -119,12 +119,31 @@ class HeliusOnChainNormalizer(HeliusParsedEventNormalizer):
         in_raw=float(parsed.get('in_amount') or 0); out_raw=float(parsed.get('actual_out_amount') or parsed.get('out_amount') or 0)
         if in_mint in self.QUOTES and out_mint not in self.QUOTES:
             mint=out_mint; et=EventType.BUY; amount=out_raw
+            quote_mint=in_mint
             sol=in_raw/1e9 if in_mint==self.WSOL else None
             usd=in_raw/1e6 if in_mint==self.USDC else None
         elif out_mint in self.QUOTES and in_mint not in self.QUOTES:
             mint=in_mint; et=EventType.SELL; amount=in_raw
+            quote_mint=out_mint
             sol=out_raw/1e9 if out_mint==self.WSOL else None
             usd=out_raw/1e6 if out_mint==self.USDC else None
         else: return out
-        out.append(MarketEvent(event_id=hashlib.sha256(f'{sig}|swap|{mint}'.encode()).hexdigest()[:24],timestamp=ts,slot=payload.get('slot'),tx_signature=sig,token_mint=mint,wallet=wallet,event_type=et,amount_token=amount,sol_value=sol,usd_value=usd,source='helius_parsed_events',asset_match_verified=True,metadata={'protocol':parsed.get('protocol'),'input_mint':in_mint,'output_mint':out_mint,'token_amount_units':'raw_until_decimals_resolved'}))
+        protocol=parsed.get('protocol')
+        protocol_text=str(protocol or '').lower()
+        quote_asset='SOL' if quote_mint==self.WSOL else 'USDC' if quote_mint==self.USDC else 'UNKNOWN'
+        out.append(MarketEvent(
+            event_id=hashlib.sha256(f'{sig}|swap|{mint}'.encode()).hexdigest()[:24],
+            timestamp=ts,slot=payload.get('slot'),tx_signature=sig,token_mint=mint,wallet=wallet,
+            event_type=et,amount_token=amount,sol_value=sol,usd_value=usd,source='helius_parsed_events',
+            asset_match_verified=True,
+            metadata={
+                'protocol':protocol,
+                'launchpad':'PUMP_FUN' if 'pump' in protocol_text else None,
+                'input_mint':in_mint,
+                'output_mint':out_mint,
+                'quote_mint':quote_mint,
+                'quote_asset':quote_asset,
+                'token_amount_units':'raw_until_decimals_resolved',
+            },
+        ))
         return out
