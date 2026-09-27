@@ -159,3 +159,15 @@ def test_very_high_degree_funder_does_not_create_active_wallet_clique():
     assert features['same_funder_concentration_raw'] == 1.0
     assert features['same_funder_concentration'] < 0.25
     assert features['effective_wallet_count'] > 30
+
+
+def test_token_cluster_features_expire_old_cobuy_window():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    actor = ActorGraphEngine(coevent_window_seconds=120)
+    for i, w in enumerate(['A', 'B', 'C']):
+        actor.observe(ev(f'co{i}', t0+timedelta(seconds=i*10), wallet=w))
+    fresh = actor.token_cluster_features('MINT', t0+timedelta(seconds=30))
+    stale = actor.token_cluster_features('MINT', t0+timedelta(minutes=5))
+    assert fresh['raw_wallet_count'] == 3
+    assert stale['raw_wallet_count'] == 0
+    assert stale['cluster_size'] == 0
