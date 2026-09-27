@@ -295,7 +295,7 @@ async def research_backfill_wallet(wallet: str, max_pages: int | None = None):
     if not settings.helius_api_key:
         raise HTTPException(503, 'HELIUS_API_KEY not configured')
     client = HeliusWalletHistoryClient(settings.helius_api_key)
-    service = WalletResearchBackfillService(client)
+    service = WalletResearchBackfillService(client, repository=engine.repository)
     result = await service.backfill_wallet(
         wallet,
         engine.store,
