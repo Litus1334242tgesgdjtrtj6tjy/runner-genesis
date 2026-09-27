@@ -37,6 +37,10 @@ class AIPaperTrader:
     def decide(self, mint: str, features: dict, probs: dict, alpha: dict, persistence: dict, has_position: bool, current_cost: float = 0.0, adds: int = 0) -> TradeProposal:
         calibrated = probs.get('genesis_prob') is not None
         genesis = float(probs.get('genesis_prob') if calibrated else probs.get('genesis_score') or 0.0)
+        research_fusion = float(features.get('fusion_research_score', genesis) or 0.0)
+        decision_score = genesis if calibrated else research_fusion
+        fusion_confidence = float(features.get('fusion_confidence', 0.0) or 0.0)
+        fusion_veto = bool(features.get('fusion_risk_veto', False))
         edge = float(alpha.get('expected_executable_edge', -1.0) or -1.0)
         hold = float(persistence.get('runner_persistence', 0.0) or 0.0)
         sellability = float(alpha.get('sellability_score', 0.0) or 0.0)
@@ -50,7 +54,9 @@ class AIPaperTrader:
 
         reasons: list[str] = []
         risks: list[str] = []
-        reasons.append(('Calibrated Genesis' if calibrated else 'Research Genesis score') + f' {genesis:.2f}')
+        reasons.append(('Calibrated Genesis' if calibrated else 'Research fusion score') + f' {decision_score:.2f}')
+        if not calibrated:
+            reasons.append(f'Fusion confidence {fusion_confidence:.2f}')
         if edge > 0:
             reasons.append(f'Executable edge proxy {edge:.3f}')
         if consensus >= 0.55:
@@ -68,16 +74,21 @@ class AIPaperTrader:
 
         if not has_position:
             if entry_validity == 'ENTRY_TOO_LATE':
-                return TradeProposal(Action.PASS, mint, confidence=genesis, utility=edge, reasons=reasons, risks=risks + ['ENTRY_TOO_LATE'])
+                return TradeProposal(Action.PASS, mint, confidence=decision_score, utility=edge, reasons=reasons, risks=risks + ['ENTRY_TOO_LATE'])
+            if fusion_veto:
+                return TradeProposal(Action.PASS, mint, confidence=decision_score, utility=edge, reasons=reasons, risks=risks + ['FUSION_RISK_VETO'])
             if signal_validity != 'VALID':
-                return TradeProposal(Action.WATCH if genesis >= self.cfg.min_genesis_to_watch else Action.PASS, mint, confidence=genesis, utility=edge, reasons=reasons, risks=risks)
+                return TradeProposal(Action.WATCH if decision_score >= self.cfg.min_genesis_to_watch else Action.PASS, mint, confidence=decision_score, utility=edge, reasons=reasons, risks=risks)
             if self.cfg.require_trained_for_entry and not calibrated:
-                return TradeProposal(Action.WATCH, mint, confidence=genesis, utility=edge, reasons=reasons + ['ENTRY_DISABLED_UNTIL_MODEL_TRAINED'], risks=risks)
-            if edge >= self.cfg.min_entry_edge and genesis >= self.cfg.min_genesis_to_watch and sellability >= 0.25:
-                size = self.cfg.default_position_eur * max(0.5, min(2.0, 0.7 + genesis + max(edge, 0)))
+                return TradeProposal(Action.WATCH, mint, confidence=decision_score, utility=edge, reasons=reasons + ['ENTRY_DISABLED_UNTIL_MODEL_TRAINED'], risks=risks)
+            if edge >= self.cfg.min_entry_edge and decision_score >= self.cfg.min_genesis_to_watch and sellability >= 0.25:
+                size = self.cfg.default_position_eur * max(0.5, min(2.0, 0.7 + decision_score + max(edge, 0)))
                 utility = edge - 0.25 * risk - 0.20 * manipulation
-                return TradeProposal(Action.ENTER, mint, size, confidence=genesis, utility=utility, reasons=reasons, risks=risks)
-            return TradeProposal(Action.WATCH if genesis >= self.cfg.min_genesis_to_watch else Action.PASS, mint, confidence=genesis, utility=edge, reasons=reasons, risks=risks)
+                entry_reasons = list(reasons)
+                if not calibrated:
+                    entry_reasons.append('UNTRAINED_RESEARCH_PAPER_ENTRY')
+                return TradeProposal(Action.ENTER, mint, size, confidence=decision_score, utility=utility, reasons=entry_reasons, risks=risks)
+            return TradeProposal(Action.WATCH if decision_score >= self.cfg.min_genesis_to_watch else Action.PASS, mint, confidence=decision_score, utility=edge, reasons=reasons, risks=risks)
 
         if hold <= self.cfg.exit_below_hold_score or sellability <= 0.12 or distribution >= 0.82:
             return TradeProposal(Action.EXIT, mint, reduce_fraction=1.0, confidence=1 - hold, utility=-risk, reasons=reasons, risks=risks)
