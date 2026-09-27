@@ -54,7 +54,14 @@ def main():
         from .experiments import AblationRunner
         settings=load_settings(args.config)
         print(json.dumps(AblationRunner(settings).run(args.file), indent=2, default=str)); return
-    settings=load_settings(args.config); engine=RunnerGenesisOmega(settings)
+    settings=load_settings(args.config)
+    if args.cmd in ('backtest', 'replay'):
+        settings.mode='BACKTEST'
+        settings.live_trading=False
+        settings.features.setdefault('database_persistence', {})['enabled']=False
+        settings.external_discovery.auto_refresh=False
+        settings.external_discovery.fomoscan_enabled=False
+    engine=RunnerGenesisOmega(settings)
     metrics=Backtester(engine).run(args.file)
     print(json.dumps(metrics.__dict__,indent=2))
 
