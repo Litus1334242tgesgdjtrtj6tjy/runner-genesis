@@ -116,14 +116,14 @@ def _slippage(amount: float, liquidity: float, execution_cfg) -> float:
     ) / 10000.0 + float(execution_cfg.impact_coefficient) * (float(amount) / liquidity)
 
 
-def _roundtrip_return(entry: dict[str, Any], exit_obs: dict[str, Any], requested_eur: float, execution_cfg) -> tuple[float, float] | None:
+def _roundtrip_return(entry: dict[str, Any], exit_obs: dict[str, Any], requested_eur: float, execution_cfg, max_slippage_pct: float | None = None) -> tuple[float, float] | None:
     max_entry = float(entry["liquidity_usd"]) * float(execution_cfg.max_liquidity_fraction)
     filled = min(float(requested_eur), max_entry)
     if filled <= 0:
         return None
 
     entry_slip = _slippage(filled, entry["liquidity_usd"], execution_cfg)
-    if entry_slip > float(execution_cfg.max_liquidity_fraction) * 10 + 0.50:
+    if max_slippage_pct is not None and entry_slip > float(max_slippage_pct):
         return None
     buy_price = float(entry["price_usd"]) * (1.0 + entry_slip)
     fee_rate = (float(execution_cfg.base_fee_bps) + float(execution_cfg.priority_fee_bps)) / 10000.0
@@ -139,6 +139,8 @@ def _roundtrip_return(entry: dict[str, Any], exit_obs: dict[str, Any], requested
     qty_exit = quantity * executable_fraction
     sell_ref = qty_exit * float(exit_obs["price_usd"])
     exit_slip = _slippage(sell_ref, exit_obs["liquidity_usd"], execution_cfg)
+    if max_slippage_pct is not None and exit_slip > float(max_slippage_pct):
+        return None
     sell_price = float(exit_obs["price_usd"]) * max(0.0, 1.0 - exit_slip)
     proceeds = qty_exit * sell_price
     exit_fee = proceeds * fee_rate
