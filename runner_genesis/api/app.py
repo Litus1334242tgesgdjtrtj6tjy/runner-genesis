@@ -249,6 +249,8 @@ def ingest_fomo(payload: dict):
     if 'token_mint' not in payload:
         raise HTTPException(400, 'token_mint required')
     obs = engine.fomo.ingest(payload)
+    if obs is None:
+        return {'ok': True, 'duplicate': True}
     if engine.repository:
         engine.repository.record_discovery({
             'token_mint': obs.token_mint,
@@ -259,7 +261,7 @@ def ingest_fomo(payload: dict):
             'confidence': obs.confidence,
             'actor_key': obs.actor_key,
         })
-    return {'ok': True, 'observation': obs.__dict__}
+    return {'ok': True, 'duplicate': False, 'observation': obs.__dict__}
 
 
 @app.get('/api/discovery/fomo/{mint}')
