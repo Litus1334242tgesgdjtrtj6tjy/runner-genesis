@@ -67,6 +67,8 @@ class MarketStateStore:
             "mint_authority_active", "freeze_authority_active", "wash_score",
             "sellability_score", "deployer_risk_score", "protocol", "launchpad",
             "pool_address", "bundle_count", "sniper_count",
+            "quote_asset", "quote_mint", "sol_usd", "pump_pool_canonical",
+            "pool_kind", "dexscreener_dex", "program", "program_id",
         ):
             if key in e.metadata and e.metadata[key] is not None:
                 t.metadata[key] = e.metadata[key]
