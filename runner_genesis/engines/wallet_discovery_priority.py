@@ -27,6 +27,7 @@ class WalletDiscoveryPriorityEngine:
             "emerging": float(self.cfg.wallet_priority_emerging_weight),
             "recent_activity": float(self.cfg.wallet_priority_recent_activity_weight),
             "independence": float(self.cfg.wallet_priority_independence_weight),
+            "cohort_quality": float(self.cfg.wallet_priority_cohort_weight),
             "data_gap": float(self.cfg.wallet_priority_data_gap_weight),
             "source_confidence": float(self.cfg.wallet_priority_source_confidence_weight),
         }
@@ -66,6 +67,7 @@ class WalletDiscoveryPriorityEngine:
         smart_metrics: dict[str, Any] | None,
         discovery_context: dict[str, Any] | None,
         independence_score: float,
+        cohort_quality: float = 0.0,
         now: datetime,
     ) -> dict[str, Any]:
         smart = smart_metrics or {}
@@ -77,6 +79,7 @@ class WalletDiscoveryPriorityEngine:
         emerging = _clip(float(smart.get("emerging_smart_wallet_score") or 0.0))
         recent = self._recent_activity(row.get("observed_at"), now)
         independence = _clip(independence_score)
+        cohort = _clip(cohort_quality)
         data_quality = _clip(float(smart.get("data_quality_score") or 0.0))
         data_gap = 1.0 - data_quality
         source_confidence = _clip(float(row.get("source_confidence") or 0.0))
@@ -88,6 +91,7 @@ class WalletDiscoveryPriorityEngine:
             "emerging": emerging,
             "recent_activity": recent,
             "independence": independence,
+            "cohort_quality": cohort,
             "data_gap": data_gap,
             "source_confidence": source_confidence,
         }
