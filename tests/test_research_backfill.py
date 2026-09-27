@@ -4,6 +4,7 @@ from runner_genesis.domain.events import EventType, MarketEvent
 from runner_genesis.engines.actor_graph import ActorGraphEngine
 from runner_genesis.engines.cohorts import CohortDiscoveryEngine
 from runner_genesis.ingestion.helius_history import EnhancedWalletHistoryNormalizer, WalletOutcomeBuilder
+from runner_genesis.ingestion.helius import HeliusWebhookNormalizer
 from runner_genesis.state_store import MarketStateStore
 
 
@@ -119,3 +120,18 @@ def test_backfill_wallet_observations_is_deduplicated_and_point_in_time():
 def test_swap_proceeds_are_not_funding_links():
     n = EnhancedWalletHistoryNormalizer()
     assert n.funding_links(WALLET, _swap_sell()) == []
+
+
+def test_generic_webhook_refuses_swap_settlement_as_transfer():
+    payload = {
+        "type": "SWAP",
+        "signature": "sig",
+        "timestamp": 1_700_000_000,
+        "tokenTransfers": [{
+            "mint": MINT,
+            "fromUserAccount": POOL,
+            "toUserAccount": WALLET,
+            "tokenAmount": 100,
+        }],
+    }
+    assert HeliusWebhookNormalizer().normalize(payload) == []
