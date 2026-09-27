@@ -1,0 +1,38 @@
+name: Materialize bootstrap source
+
+on:
+  push:
+    branches:
+      - work/v0.2-smart-capital-world-model
+    paths:
+      - ".bootstrap/**"
+      - "scripts/materialize_bootstrap.py"
+      - ".github/workflows/materialize-bootstrap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/v0.2-smart-capital-world-model
+          fetch-depth: 0
+      - name: Materialize latest payload
+        run: python scripts/materialize_bootstrap.py
+      - name: Commit materialized source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No materialized changes"
+            exit 0
+          fi
+          git commit -m "bootstrap: materialize source [skip bootstrap]"
+          git push origin HEAD:work/v0.2-smart-capital-world-model
