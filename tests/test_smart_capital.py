@@ -190,3 +190,18 @@ def test_thousand_wallet_service_funder_stays_sparse():
     assert len(wallet_edges) < 2000
     features = actor.cohort_features(wallets)
     assert features['effective_wallet_count'] > 700
+
+
+
+def test_actor_graph_dedupes_replayed_event_ids():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    actor = ActorGraphEngine()
+    a = ev('dup-a', t0, wallet='A')
+    b = ev('dup-b', t0+timedelta(seconds=10), wallet='B')
+    actor.observe(a)
+    actor.observe(b)
+    before = actor.link_confidence('A', 'B')
+    actor.observe(b)
+    after = actor.link_confidence('A', 'B')
+    assert before > 0
+    assert after == before
