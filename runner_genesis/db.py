@@ -47,6 +47,18 @@ class FillRow(Base):
     payload_json: Mapped[str] = mapped_column(Text)
 
 
+class WalletTransactionRow(Base):
+    __tablename__ = 'wallet_transactions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    wallet_address: Mapped[str] = mapped_column(String(128), index=True)
+    token_mint: Mapped[str] = mapped_column(String(128), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    source: Mapped[str] = mapped_column(String(64), default='normalized')
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
 class WalletMetricRow(Base):
     __tablename__ = 'wallet_metrics'
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -336,6 +348,52 @@ class RuntimeRepository:
                     'transactions': r.transactions,
                     'swap_events': r.swap_events,
                     'resolved_outcomes': r.resolved_outcomes,
+                    'payload': payload,
+                })
+            return out
+
+    def record_wallet_transaction(self, e) -> None:
+        if e is None or not getattr(e, 'wallet', None):
+            return
+        event_id = str(getattr(e, 'event_id', '') or '')
+        if not event_id:
+            return
+        event_type = getattr(getattr(e, 'event_type', None), 'value', str(getattr(e, 'event_type', 'UNKNOWN')))
+        with self.Session() as s:
+            s.add(WalletTransactionRow(
+                event_id=event_id,
+                wallet_address=str(e.wallet),
+                token_mint=str(e.token_mint),
+                timestamp=e.timestamp,
+                event_type=str(event_type),
+                source=str(getattr(e, 'source', None) or 'normalized'),
+                payload_json=e.model_dump_json(),
+            ))
+            try:
+                s.commit()
+            except IntegrityError:
+                s.rollback()
+
+    def load_wallet_transactions(self, limit: int = 500_000) -> list[dict]:
+        with self.Session() as s:
+            rows = s.execute(
+                select(WalletTransactionRow)
+                .order_by(WalletTransactionRow.timestamp.asc(), WalletTransactionRow.id.asc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            out = []
+            for r in rows:
+                try:
+                    payload = json.loads(r.payload_json) if r.payload_json else {}
+                except Exception:
+                    payload = {}
+                out.append({
+                    'event_id': r.event_id,
+                    'wallet_address': r.wallet_address,
+                    'token_mint': r.token_mint,
+                    'timestamp': r.timestamp,
+                    'event_type': r.event_type,
+                    'source': r.source,
                     'payload': payload,
                 })
             return out
