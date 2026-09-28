@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from .domain.events import MarketEvent
 from .ingestion.helius_history import (
     EnhancedWalletHistoryNormalizer,
     HeliusWalletHistoryClient,
@@ -177,14 +178,39 @@ class WalletResearchBackfillService:
         if smart is not None and hasattr(smart, "observe_historical_batch"):
             smart.observe_historical_batch(bundle.events)
 
-        added = store.backfill_wallet_observations(bundle.wallet, bundle.outcomes) if bundle.outcomes else 0
+        resolved_outcomes = list(bundle.outcomes)
         if self.repository:
             for event in bundle.events:
                 if hasattr(self.repository, "record_wallet_transaction"):
                     self.repository.record_wallet_transaction(event)
+
+            # Rebuild closed trade cycles across page boundaries. A BUY can live in an
+            # older continuation page while its SELL was fetched earlier; resolving each
+            # page in isolation would silently miss exactly those wallet outcomes.
+            if hasattr(self.repository, "load_wallet_transactions"):
+                replay_events = []
+                for row in self.repository.load_wallet_transactions(
+                    limit=500_000,
+                    wallet_address=bundle.wallet,
+                ):
+                    payload = row.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    try:
+                        replay_events.append(MarketEvent.model_validate(payload))
+                    except Exception:
+                        continue
+                if replay_events:
+                    resolved_outcomes = self.outcomes.build(replay_events)
+
+        added = (
+            store.backfill_wallet_observations(bundle.wallet, resolved_outcomes)
+            if resolved_outcomes else 0
+        )
+        if self.repository:
             for link in bundle.funding_links:
                 self.repository.record_funding_relationship(link)
-            for obs in bundle.outcomes:
+            for obs in resolved_outcomes:
                 self.repository.record_wallet_outcome(bundle.wallet, obs)
             if smart is not None and bundle.events:
                 latest_by_mint: dict[str, datetime] = {}
@@ -212,7 +238,7 @@ class WalletResearchBackfillService:
             transactions=len(bundle.transactions),
             swap_events=len(bundle.events),
             funding_links=len(bundle.funding_links),
-            resolved_outcomes=len(bundle.outcomes),
+            resolved_outcomes=len(resolved_outcomes),
             added_outcomes=added,
             oldest_transaction_at=oldest,
             requested_stop_before=target,
