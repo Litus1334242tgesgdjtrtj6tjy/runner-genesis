@@ -125,9 +125,13 @@ def _equity_change(repository, current_equity: float, start: datetime) -> tuple[
     if repository is None or not hasattr(repository, "load_equity_snapshot_at_or_before"):
         return None, "UNAVAILABLE"
     row = repository.load_equity_snapshot_at_or_before(start)
-    if row is None:
-        return None, "NO_BASELINE"
-    return current_equity - float(row["equity_eur"]), "EQUITY_SNAPSHOT"
+    if row is not None:
+        return current_equity - float(row["equity_eur"]), "EQUITY_SNAPSHOT"
+    if hasattr(repository, "load_first_equity_snapshot"):
+        first = repository.load_first_equity_snapshot()
+        if first is not None and _aware(first["observed_at"]) >= _aware(start):
+            return current_equity - float(first["equity_eur"]), "TRACKING_BASELINE"
+    return None, "NO_BASELINE"
 
 
 def build_paper_profile(engine, timezone_name: str = "Europe/Madrid", curve_limit: int = 480) -> dict[str, Any]:
