@@ -26,6 +26,7 @@ class ResearchSyncCoordinator:
         self._history_target_reached: set[str] = set()
         self._last_sync: datetime | None = None
         self._last_result: dict[str, Any] = {"status": "NOT_RUN"}
+        self._sync_lock = asyncio.Lock()
         self.wallet_priority = WalletDiscoveryPriorityEngine(settings.external_discovery)
         self._hydrate_backfill_status()
 
@@ -343,6 +344,10 @@ class ResearchSyncCoordinator:
         return fully_scored[:limit]
 
     async def sync_once(self, max_wallets: int | None = None) -> dict[str, Any]:
+        async with self._sync_lock:
+            return await self._sync_once_unlocked(max_wallets=max_wallets)
+
+    async def _sync_once_unlocked(self, max_wallets: int | None = None) -> dict[str, Any]:
         if not self.enabled:
             result = {
                 "status": "WAITING_CREDENTIALS_OR_DISABLED",
