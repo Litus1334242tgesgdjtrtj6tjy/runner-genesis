@@ -182,3 +182,57 @@ def test_minor_cluster_fraction_does_not_trigger_portfolio_cluster_cap():
         now=now,
     )
     assert "MAX_WALLET_CLUSTER_EXPOSURE" not in decision.reasons
+
+
+
+def test_entry_fees_count_toward_position_and_cash_limits():
+    cfg = RiskConfig(
+        min_liquidity_usd=10000,
+        max_account_pct_per_trade=1.0,
+        max_position_eur=10.0,
+        max_daily_spend_eur=100.0,
+    )
+    g = RiskGovernor(cfg)
+    a = PaperAccount(10.0, 10.0)
+    token = TokenState("M", liquidity_usd=100000)
+    proposal = TradeProposal(Action.ENTER, "M", amount_eur=10.0)
+    d = g.evaluate(
+        proposal,
+        a,
+        token,
+        features={
+            "sellability_score": 1.0,
+            "manipulation_risk": 0.0,
+            "entry_validity": "VALID",
+            "estimated_entry_fee_eur": 0.20,
+        },
+    )
+    assert not d.approved
+    assert "MAX_POSITION" in d.reasons
+    assert "INSUFFICIENT_CASH" in d.reasons
+
+
+def test_entry_fees_count_toward_daily_spend_limit():
+    cfg = RiskConfig(
+        min_liquidity_usd=10000,
+        max_account_pct_per_trade=1.0,
+        max_position_eur=100.0,
+        max_daily_spend_eur=20.0,
+    )
+    g = RiskGovernor(cfg)
+    a = PaperAccount(300.0, 300.0)
+    a.daily_spend_eur = 10.0
+    token = TokenState("M", liquidity_usd=100000)
+    proposal = TradeProposal(Action.ENTER, "M", amount_eur=9.9)
+    d = g.evaluate(
+        proposal,
+        a,
+        token,
+        features={
+            "sellability_score": 1.0,
+            "manipulation_risk": 0.0,
+            "entry_validity": "VALID",
+            "estimated_entry_fee_eur": 0.2,
+        },
+    )
+    assert "MAX_DAILY_SPEND" in d.reasons
