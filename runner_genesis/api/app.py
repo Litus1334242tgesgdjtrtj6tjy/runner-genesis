@@ -15,7 +15,7 @@ from ..research_sync import ResearchSyncCoordinator
 
 settings = load_settings()
 engine = RunnerGenesisOmega(settings)
-app = FastAPI(title='RUNNER GENESIS Ω', version='0.2.0')
+app = FastAPI(title='RUNNER GENESIS Ω', version='0.3.0')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'],
@@ -54,7 +54,7 @@ async def _stop_research_sync():
 def health():
     return {
         'ok': True,
-        'version': '0.2.0',
+        'version': '0.3.0',
         'mode': settings.mode,
         'network': settings.network,
         'paper_starting_capital_eur': settings.paper_starting_capital_eur,
