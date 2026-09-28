@@ -299,12 +299,22 @@ class RunnerGenesisOmega:
         ]
         return np.array([float(f.get(k, 0.0) or 0.0) for k in keys], dtype=np.float32)
 
+    def _risk_features_for_proposal(self, proposal: TradeProposal, token, features: dict) -> dict:
+        out=dict(features)
+        if proposal.action in (Action.ENTER, Action.ADD):
+            out['estimated_entry_fee_eur']=self.execution.estimate_entry_fee_eur(
+                proposal.amount_eur,
+                token,
+            )
+        return out
+
     def _execute(self, proposal: TradeProposal, token, now: datetime, features: dict) -> tuple[PaperFill | None, bool, list[str]]:
         pos = self.portfolio.account.positions.get(proposal.token_mint)
         position_qty = pos.quantity if pos else 0.0
         requested = proposal.amount_eur if proposal.amount_eur else (position_qty * float(token.price_usd or 0) * proposal.reduce_fraction)
         est_slip = self.execution.estimate_slippage(requested, float(token.liquidity_usd or 0)) if requested > 0 and token.liquidity_usd else 0.0
-        rd = self.risk.evaluate(proposal, self.portfolio.account, token, est_slip, features, now=now)
+        risk_features=self._risk_features_for_proposal(proposal,token,features)
+        rd = self.risk.evaluate(proposal, self.portfolio.account, token, est_slip, risk_features, now=now)
         fill = None
         if rd.approved:
             fill = self.execution.execute(proposal, token, now, position_qty)
@@ -545,7 +555,14 @@ class RunnerGenesisOmega:
         action_label = proposal.action.value
 
         if proposal.action in (Action.ENTER, Action.ADD) and float(self.settings.execution.execution_delay_seconds) > 0:
-            pre_rd = self.risk.evaluate(proposal, self.portfolio.account, token, 0.0, f, now=e.timestamp)
+            pre_rd = self.risk.evaluate(
+                proposal,
+                self.portfolio.account,
+                token,
+                0.0,
+                self._risk_features_for_proposal(proposal, token, f),
+                now=e.timestamp,
+            )
             risk_approved = pre_rd.approved
             risk_reasons.extend(pre_rd.reasons)
             if pre_rd.approved and e.token_mint not in self.pending_orders:
