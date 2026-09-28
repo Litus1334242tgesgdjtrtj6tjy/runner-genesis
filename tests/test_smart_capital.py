@@ -309,3 +309,66 @@ def test_dominant_actor_cluster_fingerprint_repeats_across_tokens():
     assert a["dominant_actor_cluster_id"] == b["dominant_actor_cluster_id"]
     assert a["dominant_actor_cluster_fraction"] == 1.0
     assert b["dominant_actor_cluster_fraction"] == 1.0
+
+
+
+def test_paged_backfill_rebuilds_wallet_in_global_chronological_order():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    q = WalletQualityEngine()
+    smart = SmartCapitalEngine(
+        SmartCapitalConfig(),
+        q,
+        PumpDiscoveryEngine(PumpDiscoveryConfig()),
+    )
+    older_buy = MarketEvent(
+        event_id="old-buy",
+        timestamp=t0,
+        token_mint="M",
+        wallet="W",
+        event_type=EventType.BUY,
+        amount_token=100.0,
+        usd_value=100.0,
+        price_usd=1.0,
+    )
+    newer_buy = MarketEvent(
+        event_id="new-buy",
+        timestamp=t0 + timedelta(minutes=10),
+        token_mint="M",
+        wallet="W",
+        event_type=EventType.BUY,
+        amount_token=100.0,
+        usd_value=200.0,
+        price_usd=2.0,
+    )
+    newer_sell = MarketEvent(
+        event_id="new-sell",
+        timestamp=t0 + timedelta(minutes=20),
+        token_mint="M",
+        wallet="W",
+        event_type=EventType.SELL,
+        amount_token=100.0,
+        usd_value=150.0,
+        price_usd=1.5,
+    )
+
+    # Helius history arrives newest pages first.
+    smart.observe_historical_batch([newer_buy, newer_sell])
+    provisional = smart.positions[("W", "M")]
+    assert provisional.first_entry_time == newer_buy.timestamp
+
+    # A continuation page contains the older true first entry. The final state must be
+    # identical to a single globally chronological replay.
+    smart.observe_historical_batch([older_buy])
+    p = smart.positions[("W", "M")]
+    assert p.first_entry_time == older_buy.timestamp
+    assert p.last_activity_time == newer_sell.timestamp
+    assert p.buy_count == 2
+    assert p.sell_count == 1
+    assert abs(p.retained_fraction - 0.5) < 1e-12
+    assert abs(p.average_entry_price - (5.0 / 3.0)) < 1e-12
+
+    # Re-fetching the same page is idempotent.
+    smart.observe_historical_batch([older_buy, newer_buy, newer_sell])
+    p2 = smart.positions[("W", "M")]
+    assert p2.buy_count == 2
+    assert p2.sell_count == 1
