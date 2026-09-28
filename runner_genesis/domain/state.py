@@ -89,7 +89,7 @@ class PaperAccount:
         if at.tzinfo is None:
             at = at.replace(tzinfo=timezone.utc)
         day = at.astimezone(timezone.utc).date()
-        if self.accounting_day_utc != day:
+        if self.accounting_day_utc is None or day > self.accounting_day_utc:
             self.accounting_day_utc = day
             self.daily_spend_eur = 0.0
             self.daily_realized_pnl_eur = 0.0

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class RiskConfig(BaseModel):
@@ -42,6 +42,7 @@ class ExecutionConfig(BaseModel):
     network_base_fee_lamports: int = 5000
     network_priority_fee_lamports: int = 0
     network_signature_count: int = 1
+    pending_expiry_seconds: float = Field(default=300.0, gt=0)
 
 
 class TraderConfig(BaseModel):
@@ -157,6 +158,7 @@ class ExternalDiscoveryConfig(BaseModel):
 
 
 class Settings(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
     mode: str = "PAPER"
     live_trading: bool = False
     paper_starting_capital_eur: float = 300.0
@@ -180,6 +182,21 @@ class Settings(BaseModel):
     helius_api_key: str | None = None
     fomoscan_api_key: str | None = None
     fomoscan_base_url: str = "https://api.fomoscan.sh"
+
+    @field_validator("live_trading")
+    @classmethod
+    def forbid_live_trading(cls, value: bool) -> bool:
+        if value:
+            raise ValueError("LIVE_TRADING must remain false; this is a PAPER/SHADOW laboratory")
+        return False
+
+    @field_validator("mode")
+    @classmethod
+    def safe_mode(cls, value: str) -> str:
+        value = value.upper()
+        if value not in {"PAPER", "SHADOW", "LIVE_SHADOW", "BACKTEST", "REPLAY"}:
+            raise ValueError("Only PAPER, SHADOW, LIVE_SHADOW, BACKTEST and REPLAY are supported")
+        return value
 
     @property
     def paper_only(self) -> bool:

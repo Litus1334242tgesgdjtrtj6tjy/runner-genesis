@@ -1,6 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
+import math
 from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
@@ -67,7 +68,16 @@ class MarketEvent(BaseModel):
     def valid_unit_interval(cls, v: float | None) -> float | None:
         if v is None:
             return None
+        if not math.isfinite(v):
+            raise ValueError("quality/confidence must be finite")
         return min(1.0, max(0.0, v))
+
+    @field_validator("price_usd", "market_cap_usd", "liquidity_usd", "amount_token", "sol_value", "usd_value")
+    @classmethod
+    def nonnegative_finite(cls, value: float | None) -> float | None:
+        if value is not None and (not math.isfinite(value) or value < 0):
+            raise ValueError("market amounts must be finite and nonnegative")
+        return value
 
 
 class DecisionSnapshot(BaseModel):

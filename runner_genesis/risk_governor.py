@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
+import math
 from .ai_trader import TradeProposal, Action
 from .domain.state import PaperAccount, TokenState
 
@@ -29,10 +30,13 @@ class RiskGovernor:
             account.advance_accounting_day(now)
         f = features or {}
         r: list[str] = []
-        if self.cfg.kill_switch:
+        entering = p.action in (Action.ENTER, Action.ADD)
+        if self.cfg.kill_switch and entering:
             r.append('KILL_SWITCH')
 
         if p.action in (Action.ENTER, Action.ADD):
+            if not math.isfinite(p.amount_eur) or p.amount_eur <= 0:
+                r.append('INVALID_ORDER_SIZE')
             estimated_fee=max(0.0,float(f.get('estimated_entry_fee_eur',0.0) or 0.0))
             entry_cash_cost=max(0.0,float(p.amount_eur))+estimated_fee
             max_from_pct = max(0.0, account.equity_eur * self.cfg.max_account_pct_per_trade)
@@ -96,7 +100,7 @@ class RiskGovernor:
                 if cluster_exposure + entry_cash_cost > cluster_limit + 1e-9:
                     r.append('MAX_WALLET_CLUSTER_EXPOSURE')
 
-        if estimated_slippage_pct > self.cfg.max_slippage_pct:
+        if not math.isfinite(estimated_slippage_pct) or estimated_slippage_pct > self.cfg.max_slippage_pct:
             r.append('MAX_SLIPPAGE')
 
         # Drawdown/daily-loss limits stop new risk. They must not trap an already-open

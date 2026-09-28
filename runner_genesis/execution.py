@@ -77,16 +77,20 @@ class PaperExecutionEngine:
     def execute(self,p:TradeProposal,token:TokenState,now:datetime,position_quantity:float=0.0)->PaperFill|None:
         if p.action not in (Action.ENTER,Action.ADD,Action.PROTECT,Action.PARTIAL_EXIT,Action.REDUCE,Action.EXIT,Action.KEEP_RUNNER_BAG): return None
         price=float(token.price_usd or 0.0); liq=float(token.liquidity_usd or 0.0)
-        if price<=0 or liq<=0:
+        if not math.isfinite(price) or not math.isfinite(liq) or price<=0 or liq<=0:
             return PaperFill(p.token_mint,'NA',0,0,0,price,price,1.0,0,0,True,False,now,'NO_EXECUTABLE_PRICE_OR_LIQUIDITY')
         rng=self._rng(f'{p.token_mint}|{now.isoformat()}|{p.action.value}')
         latency=max(0.0,float(rng.normal(self.cfg.latency_ms_mean,self.cfg.latency_ms_std)))
         fail_p=min(0.50,self.cfg.failed_tx_base_probability + max(0.0,10_000-liq)/10_000*0.08)
         failed=bool(rng.random()<fail_p)
         side='BUY' if p.action in (Action.ENTER,Action.ADD) else 'SELL'
-        reduce_fraction=max(0.0,min(1.0,float(p.reduce_fraction or 1.0)))
+        reduce_fraction=float(p.reduce_fraction)
         target_qty=max(0.0,float(position_quantity))*reduce_fraction if side=='SELL' else 0.0
         requested=float(p.amount_eur) if side=='BUY' else target_qty*price
+        if not math.isfinite(requested) or requested <= 0 or (side == 'SELL' and not 0 < reduce_fraction <= 1):
+            return None
+        if side == 'SELL' and token.metadata.get('sellability_score') == 0:
+            return PaperFill(p.token_mint,side,requested,0,0,price,price,0,0,0,True,False,now,'UNSELLABLE')
         network_fee=self.estimate_network_fee_eur(token)
         if failed:
             return PaperFill(
@@ -99,6 +103,8 @@ class PaperExecutionEngine:
         reference_filled=min(requested,max_fill) if self.cfg.partial_fill_enabled else requested
         partial=reference_filled+1e-12<requested
         slip=self.estimate_slippage(reference_filled,liq)
+        if not math.isfinite(slip) or not 0 <= slip < 1:
+            return PaperFill(p.token_mint,side,requested,0,0,price,price,slip,0,latency,True,False,now,'NON_EXECUTABLE_SLIPPAGE')
         direction=1 if side=='BUY' else -1
         exec_price=price*(1+direction*slip)
         fee_quote=self.pump_fees.quote(token)
