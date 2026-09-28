@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import asyncio
 import inspect
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any
 
@@ -164,6 +165,7 @@ class WalletResearchBackfillService:
         smart=None,
         apply_actor_events: bool = True,
         apply_funding: bool = True,
+        state_lock=None,
     ) -> BackfillResult:
         if apply_actor_events:
             if hasattr(actor, "observe_historical_batch"):
@@ -259,6 +261,7 @@ class WalletResearchBackfillService:
         max_pages: int = 5,
         stop_before_time: datetime | None = None,
         before: str | None = None,
+        state_lock=None,
     ) -> BackfillResult:
         bundle = await self.fetch_wallet_bundle(
             wallet,
@@ -267,7 +270,13 @@ class WalletResearchBackfillService:
             stop_before_time=stop_before_time,
             before=before,
         )
-        return self.apply_bundle(bundle, store, actor, smart=smart)
+        return self.apply_bundle(
+            bundle,
+            store,
+            actor,
+            smart=smart,
+            state_lock=state_lock,
+        )
 
 
 class FomoScanPumpProvider:
