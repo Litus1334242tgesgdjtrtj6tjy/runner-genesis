@@ -51,6 +51,19 @@ class HeliusWalletHistoryClient:
         self.timeout_seconds = float(timeout_seconds)
         self.max_retries = max(0, int(max_retries))
 
+    @staticmethod
+    def _row_timestamp(row: dict[str, Any]) -> datetime | None:
+        raw = row.get("timestamp") or row.get("blockTime")
+        if isinstance(raw, (int, float)):
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        if isinstance(raw, str):
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+        return None
+
     async def fetch_transactions(
         self,
         address: str,
@@ -58,6 +71,7 @@ class HeliusWalletHistoryClient:
         limit: int = 100,
         max_pages: int = 5,
         before: str | None = None,
+        stop_before_time: datetime | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch newest-first Enhanced Transactions with conservative pagination."""
         address = str(address).strip()
@@ -98,6 +112,7 @@ class HeliusWalletHistoryClient:
                 if not isinstance(payload, list) or not payload:
                     break
                 rows = [x for x in payload if isinstance(x, dict)]
+                reached_time_cutoff = False
                 for row in rows:
                     sig = str(row.get("signature") or "")
                     if sig and sig in seen_signatures:
@@ -105,7 +120,13 @@ class HeliusWalletHistoryClient:
                     if sig:
                         seen_signatures.add(sig)
                     out.append(row)
-                if len(rows) < limit:
+                    if stop_before_time is not None:
+                        ts = self._row_timestamp(row)
+                        if ts is not None:
+                            cutoff = stop_before_time if stop_before_time.tzinfo else stop_before_time.replace(tzinfo=timezone.utc)
+                            if ts <= cutoff:
+                                reached_time_cutoff = True
+                if reached_time_cutoff or len(rows) < limit:
                     break
                 last_sig = rows[-1].get("signature")
                 if not last_sig or last_sig == cursor:
