@@ -367,22 +367,45 @@ class SmartCapitalEngine:
         }.get(style, 0.50)
 
     def conviction(self, p: WalletTokenPosition, store: MarketStateStore) -> tuple[float, float]:
-        w = store.wallets.get(p.wallet_address)
-        history = [float(x[1]) for x in (w.buys if w else []) if float(x[1] or 0) > 0]
-        last_size = p.buy_sizes_usd[-1] if p.buy_sizes_usd else 0.0
-        vs_median = None
+        # Prefer normalized size relative to this wallet's own historical behavior. This
+        # works for both USD/USDC and SOL-quoted Pump trades without inventing an FX rate.
+        usd_history = [
+            float(size)
+            for (wallet, _), position in self.positions.items()
+            if wallet == p.wallet_address
+            for size in position.buy_sizes_usd
+            if float(size or 0.0) > 0
+        ]
+        sol_history = [
+            float(size)
+            for (wallet, _), position in self.positions.items()
+            if wallet == p.wallet_address
+            for size in position.buy_sizes_sol
+            if float(size or 0.0) > 0
+        ]
+        last_usd = p.buy_sizes_usd[-1] if p.buy_sizes_usd else 0.0
+        last_sol = p.buy_sizes_sol[-1] if p.buy_sizes_sol else 0.0
+
         score_parts = []
         confidence_parts = []
+        history = usd_history if last_usd > 0 else sol_history
+        last_size = last_usd if last_usd > 0 else last_sol
         if history and last_size > 0:
             med = median(history)
             if med > 0:
                 vs_median = last_size / med
                 score_parts.append(_clip(vs_median / 2.0))
                 confidence_parts.append(min(1.0, len(history) / 10.0))
-        if p.estimated_liquid_capital_usd and p.estimated_liquid_capital_usd > 0 and p.current_exposure_usd > 0:
+
+        if (
+            p.estimated_liquid_capital_usd
+            and p.estimated_liquid_capital_usd > 0
+            and p.current_exposure_usd > 0
+        ):
             relative = p.current_exposure_usd / p.estimated_liquid_capital_usd
             score_parts.append(_clip(relative / 0.10))
             confidence_parts.append(1.0)
+
         if not score_parts:
             return 0.0, 0.0
         return sum(score_parts) / len(score_parts), sum(confidence_parts) / len(confidence_parts)
