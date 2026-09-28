@@ -1,9 +1,9 @@
 # Current State
 
-VERSION: 0.2.0-development
+VERSION: 0.3.0
 BRANCH: work/v0.2-smart-capital-world-model
 LATEST VERIFIED CODE CHECKPOINT: be386666df00621902918aed9c818d5c5cd7897d
-SAFE_MODE_STATUS: PAPER / SHADOW / BACKTEST only. LIVE_TRADING=false. No private-key sender exists.
+SAFE_MODE_STATUS: Solana-only PAPER / SHADOW / BACKTEST. LIVE_TRADING=false. No private-key sender exists.
 
 ## Implemented
 - Exact-mint candidate gate, conservative BUY/SELL normalization and UNKNOWN-data semantics.
@@ -34,11 +34,11 @@ SAFE_MODE_STATUS: PAPER / SHADOW / BACKTEST only. LIVE_TRADING=false. No private
 - Executable-runner dataset builder excludes right-censored decisions and keeps future labels out of point-in-time features.
 - Chronological calibrated Genesis training, label-availability purging, walk-forward evaluation and expanded precision/recall/F1/PR-AUC/ROC-AUC/Brier/log-loss/ECE metrics.
 - Backtest trade metrics include net PnL, ROI, win rate, expectancy, profit factor, drawdown, hold time, MFE/MAE, captured MFE, multi-bagger rates, turnover and costs.
-- Component ablation harness and dashboard panels for candidates, Early Formation, fusion, MiroFish/FlyWire, Pump discovery, TRUE smart wallets, clan alpha/risk and open PAPER swings.
+- Component ablation harness plus a portfolio-first PAPER profile UI with €300 starting balance, equity/PnL windows, token images, open/closed positions and ledger activity. Advanced candidates/Fusion/MiroFish/FlyWire diagnostics remain available under Radar/System.
 
 ## Latest verification
-GitHub Actions run 264 at commit be386666df00621902918aed9c818d5c5cd7897d:
-- Python: 108 passed.
+v0.3 profile verification:
+- Python: 156 passed.
 - Demo backtest smoke: success.
 - Component ablation smoke: success.
 - Frontend production build: success.
