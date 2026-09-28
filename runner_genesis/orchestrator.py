@@ -253,6 +253,8 @@ class RunnerGenesisOmega:
                     network_fee_eur=float(row.get('network_fee_eur') or 0.0),
                     risk_cluster_id=row.get('risk_cluster_id'),
                     risk_cluster_fraction=float(row.get('risk_cluster_fraction') or 0.0),
+                    proposal_action=row.get('proposal_action'),
+                    proposal_reduce_fraction=float(row.get('proposal_reduce_fraction') or 0.0),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -510,7 +512,18 @@ class RunnerGenesisOmega:
         has_pos = pos is not None
         current_cost = pos.cost_basis_eur if pos else 0.0
         adds = pos.adds if pos else 0
-        proposal = self.trader.decide(e.token_mint, f, probs, alpha, persistence, has_pos, current_cost, adds)
+        proposal = self.trader.decide(
+            e.token_mint,
+            f,
+            probs,
+            alpha,
+            persistence,
+            has_pos,
+            current_cost,
+            adds,
+            current_quantity=(pos.quantity if pos else 0.0),
+            moonbag_target_quantity=(getattr(pos, 'moonbag_target_quantity', 0.0) if pos else 0.0),
+        )
 
         fill = due_fill
         risk_approved = True
