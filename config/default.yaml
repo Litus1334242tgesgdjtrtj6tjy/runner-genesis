@@ -1,12 +1,16 @@
 mode: PAPER
 live_trading: false
+network: solana
+paper_timezone: Europe/Madrid
 paper_starting_capital_eur: 300.0
 currency: EUR
 
 features:
   social_enabled: false
+  database_persistence:
+    enabled: true
   flywire:
-    enabled: false
+    enabled: true
     artifact_dir: ./artifacts/flywire
     state_dim: 64
     alpha: 0.90
@@ -30,6 +34,65 @@ features:
   genesis_model:
     model_path: ./artifacts/models/genesis_model.joblib
 
+smart_capital:
+  enabled: true
+  min_wallet_quality: 0.20
+  min_strategy_match: 0.35
+  min_effective_wallets: 1.25
+  min_consensus: 0.55
+  min_accumulation: 0.45
+  min_conviction: 0.35
+  max_entry_distance_price: 1.50
+  freshness_half_life_seconds: 900
+  quality_sample_target: 30
+  state_confirm_threshold: 0.62
+  state_persistence_threshold: 0.68
+  distribution_protect_threshold: 0.58
+  distribution_exit_threshold: 0.76
+
+pump_discovery:
+  enabled: true
+  top_traders_enabled: true
+  kol_enabled: true
+  cohort_enabled: true
+  max_snapshot_age_seconds: 3600
+  participant_window_seconds: 300
+
+fomo:
+  enabled: true
+  minimum_source_confidence: 0.35
+  maximum_source_age_seconds: 900
+  window_seconds: 300
+
+mirofish:
+  enabled: true
+  num_rollouts: 128
+  horizon_seconds: 900
+  random_seed: 20260927
+  max_agents: 64
+  rollout_timeout_ms: 250
+  use_world_model_prior: true
+  require_min_data_quality: 0.45
+  trigger_min_consensus: 0.25
+  trigger_min_accumulation: 0.20
+  trigger_min_top_trader_wave: 0.20
+  trigger_min_fomo: 0.30
+  trigger_min_early_formation: 0.45
+  min_rerun_seconds: 20
+  material_change_threshold: 0.08
+
+persistence:
+  enabled: true
+
+early_formation:
+  enabled: true
+  lookback_seconds: 60
+  history_seconds: 300
+  min_elapsed_seconds: 20
+  max_price_runup_for_headroom: 0.60
+  watch_threshold: 0.35
+  forming_threshold: 0.55
+
 risk:
   max_position_eur: 25.0
   max_account_pct_per_trade: 0.08
@@ -44,11 +107,15 @@ risk:
   max_bundle_pct: 0.30
   max_suspected_related_concentration_pct: 0.35
   max_correlated_exposure_pct: 0.35
+  min_cluster_fraction_for_exposure: 0.50
+  min_sellability_score: 0.25
+  max_manipulation_risk: 0.78
   kill_switch: false
 
 execution:
   latency_ms_mean: 1100
   latency_ms_std: 250
+  execution_delay_seconds: 60
   base_fee_bps: 35
   priority_fee_bps: 10
   mev_adverse_bps: 20
@@ -57,6 +124,9 @@ execution:
   max_liquidity_fraction: 0.02
   failed_tx_base_probability: 0.015
   partial_fill_enabled: true
+  network_base_fee_lamports: 5000
+  network_priority_fee_lamports: 0
+  network_signature_count: 1
 
 trader:
   min_genesis_to_watch: 0.55
@@ -67,6 +137,39 @@ trader:
   moonbag_fraction: 0.15
   max_adds_per_position: 2
   default_position_eur: 10.0
+  require_trained_for_entry: true
+  allow_untrained_paper_entry: true
 
 point_in_time:
   strict: true
+
+helius_history:
+  enabled: true
+  page_limit: 100
+  max_pages: 5
+  bootstrap_max_pages: 10
+  lookback_days: 30
+  bootstrap_refresh_seconds: 1800
+  min_funding_sol: 0.01
+  refresh_seconds: 21600
+  max_concurrency: 4
+  hydrate_max_rows: 100000
+
+external_discovery:
+  fomoscan_enabled: true
+  auto_refresh: true
+  refresh_seconds: 300
+  max_wallets_per_refresh: 25
+  top_wallet_backfill_fraction: 0.60
+  wallet_priority_enabled: true
+  wallet_priority_candidate_pool: 200
+  wallet_priority_rank_weight: 0.16
+  wallet_priority_rank_momentum_weight: 0.10
+  wallet_priority_smart_30d_weight: 0.20
+  wallet_priority_emerging_weight: 0.18
+  wallet_priority_recent_activity_weight: 0.12
+  wallet_priority_independence_weight: 0.10
+  wallet_priority_cohort_weight: 0.08
+  wallet_priority_data_gap_weight: 0.08
+  wallet_priority_source_confidence_weight: 0.06
+  wallet_priority_activity_half_life_seconds: 1800

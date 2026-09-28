@@ -1,0 +1,74 @@
+from __future__ import annotations
+import argparse, json, os
+from pathlib import Path
+from .config import load_settings
+from .orchestrator import RunnerGenesisOmega
+from .backtest import Backtester
+from .demo import make_demo
+
+def main():
+    ap=argparse.ArgumentParser(prog='runner-genesis')
+    ap.add_argument('--config',default='config/default.yaml')
+    sub=ap.add_subparsers(dest='cmd',required=True)
+    s=sub.add_parser('demo'); s.add_argument('--out',default='data/demo/demo_events.jsonl')
+    s=sub.add_parser('backtest'); s.add_argument('file')
+    s=sub.add_parser('ablation'); s.add_argument('file')
+    s=sub.add_parser('replay'); s.add_argument('file')
+    s=sub.add_parser('flywire-preprocess'); s.add_argument('connections'); s.add_argument('--out',default='artifacts/flywire'); s.add_argument('--max-nodes',type=int,default=20000); s.add_argument('--min-syn-count',type=int,default=2)
+    s=sub.add_parser('serve'); s.add_argument('--host',default='127.0.0.1'); s.add_argument('--port',type=int,default=8000)
+    sub.add_parser('doctor')
+    s=sub.add_parser('build-dataset'); s.add_argument('--out',default='data/training/executable_runner.csv')
+    s=sub.add_parser('train-genesis'); s.add_argument('dataset'); s.add_argument('--out',default='artifacts/models/genesis_model.joblib'); s.add_argument('--min-rows',type=int,default=100)
+    s=sub.add_parser('walk-forward'); s.add_argument('dataset'); s.add_argument('--target',default='y_executable_runner'); s.add_argument('--min-train-rows',type=int,default=100); s.add_argument('--folds',type=int,default=4)
+    s=sub.add_parser('benchmark-strategies'); s.add_argument('dataset')
+    s=sub.add_parser('shadow'); s.add_argument('--program',action='append',default=[])
+    args=ap.parse_args()
+    if args.cmd=='demo': print(make_demo(args.out)); return
+    if args.cmd=='flywire-preprocess':
+        from .flywire.preprocess import preprocess_connections
+        print(json.dumps(preprocess_connections(args.connections,args.out,args.max_nodes,args.min_syn_count),indent=2)); return
+    if args.cmd=='serve':
+        import uvicorn; uvicorn.run('runner_genesis.api.app:app',host=args.host,port=args.port,reload=False); return
+    if args.cmd=='doctor':
+        from .diagnostics import doctor_json
+        settings=load_settings(args.config)
+        print(doctor_json(settings)); return
+    if args.cmd=='build-dataset':
+        from .training import build_executable_dataset
+        settings=load_settings(args.config)
+        df=build_executable_dataset(settings.database_url, settings, args.out)
+        print(json.dumps({'rows':len(df),'out':args.out},indent=2)); return
+    if args.cmd=='train-genesis':
+        from .training import train_genesis_from_dataset
+        report=train_genesis_from_dataset(args.dataset,args.out,min_rows=args.min_rows)
+        print(json.dumps({'out':args.out,'report':report},indent=2,default=str)); return
+    if args.cmd=='walk-forward':
+        from .training import walk_forward_evaluate
+        report=walk_forward_evaluate(args.dataset,target=args.target,min_train_rows=args.min_train_rows,folds=args.folds)
+        print(json.dumps(report,indent=2,default=str)); return
+    if args.cmd=='benchmark-strategies':
+        from .strategy_benchmarks import benchmark_entry_strategies
+        settings=load_settings(args.config)
+        report=benchmark_entry_strategies(args.dataset,settings)
+        print(json.dumps(report,indent=2,default=str)); return
+    if args.cmd=='shadow':
+        import asyncio
+        from .shadow import run_shadow
+        settings=load_settings(args.config); settings.mode='LIVE_SHADOW'; settings.live_trading=False
+        asyncio.run(run_shadow(settings,args.program or None)); return
+    if args.cmd=='ablation':
+        from .experiments import AblationRunner
+        settings=load_settings(args.config)
+        print(json.dumps(AblationRunner(settings).run(args.file), indent=2, default=str)); return
+    settings=load_settings(args.config)
+    if args.cmd in ('backtest', 'replay'):
+        settings.mode='BACKTEST'
+        settings.live_trading=False
+        settings.features.setdefault('database_persistence', {})['enabled']=False
+        settings.external_discovery.auto_refresh=False
+        settings.external_discovery.fomoscan_enabled=False
+    engine=RunnerGenesisOmega(settings)
+    metrics=Backtester(engine).run(args.file)
+    print(json.dumps(metrics.__dict__,indent=2))
+
+if __name__=='__main__': main()

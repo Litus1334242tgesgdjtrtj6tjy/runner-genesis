@@ -1,0 +1,209 @@
+from datetime import datetime, timezone, timedelta
+
+import numpy as np
+import pandas as pd
+
+from runner_genesis.config import Settings
+from runner_genesis.db import EventRow
+from runner_genesis.engines.genesis import FEATURE_ORDER, RunnerGenesisModel
+from runner_genesis.training import (
+    ExecutableLabelConfig,
+    TARGETS,
+    _future_labels,
+    _event_observation,
+    _roundtrip_return,
+    train_genesis_from_dataset,
+    walk_forward_evaluate,
+    _with_label_availability,
+    _purge_before_boundary,
+    _purge_token_overlap,
+    _token_balanced_weights,
+    _safe_metric,
+    _label_horizon_fully_observed,
+)
+
+
+def test_future_labels_use_delayed_executable_entry_and_future_only():
+    settings = Settings()
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    observations = [
+        {"timestamp": t0 + timedelta(seconds=30), "price_usd": 0.5, "liquidity_usd": 100_000},
+        {"timestamp": t0 + timedelta(seconds=60), "price_usd": 1.0, "liquidity_usd": 100_000},
+        {"timestamp": t0 + timedelta(minutes=10), "price_usd": 2.2, "liquidity_usd": 100_000},
+        {"timestamp": t0 + timedelta(minutes=20), "price_usd": 3.2, "liquidity_usd": 100_000},
+        {"timestamp": t0 + timedelta(minutes=50), "price_usd": 5.5, "liquidity_usd": 100_000},
+        {"timestamp": t0 + timedelta(minutes=60), "price_usd": 3.0, "liquidity_usd": 100_000},
+    ]
+    labels = _future_labels(
+        observations,
+        t0,
+        settings.execution,
+        ExecutableLabelConfig(entry_delay_seconds=60, default_position_eur=10),
+    )
+    assert labels is not None
+    assert labels["label_entry_time"] == t0 + timedelta(seconds=60)
+    assert labels["label_entry_price"] == 1.0
+    assert labels["label_available_at"] == t0 + timedelta(hours=1)
+    assert labels["y_x2_15m"] == 1
+    assert labels["y_x3_30m"] == 1
+    assert labels["y_x5_60m"] == 1
+    assert labels["fixed_exit_net_return_60m"] is not None
+    assert labels["fixed_exit_net_return_60m"] > 1.0
+
+
+def test_chronological_training_writes_loadable_calibrated_artifact(tmp_path):
+    n = 120
+    times = pd.date_range("2026-01-01", periods=n, freq="2h", tz="UTC")
+    rows = []
+    target_columns = sorted(set(TARGETS.values()))
+    for i in range(n):
+        positive = int(i % 2 == 0)
+        row = {
+            "decision_time": times[i],
+            "token_mint": f"M{i}",
+            "action_at_t": "WATCH",
+            "model_version_at_t": "test",
+        }
+        for j, feature in enumerate(FEATURE_ORDER):
+            row[feature] = (1.0 if positive else -1.0) + 0.01 * j + 0.001 * i
+        for target in target_columns:
+            row[target] = positive
+        rows.append(row)
+
+    dataset = tmp_path / "training.csv"
+    model_path = tmp_path / "genesis_model.joblib"
+    pd.DataFrame(rows).to_csv(dataset, index=False)
+
+    report = train_genesis_from_dataset(dataset, model_path, min_rows=100)
+    assert model_path.exists()
+    assert "genesis_prob" in report["metrics"]
+    assert report["split"]["train_rows"] > report["split"]["validation_rows"]
+
+    model = RunnerGenesisModel(str(model_path))
+    assert model.model_status == "TRAINED"
+    features = {k: 1.0 for k in FEATURE_ORDER}
+    out = model.predict(features)
+    assert out["genesis_prob"] is not None
+    assert 0.0 <= out["genesis_prob"] <= 1.0
+
+    walk = walk_forward_evaluate(dataset, min_train_rows=80, folds=3)
+    assert walk["aggregate"]["folds_scored"] >= 2
+    assert 0.0 <= walk["aggregate"]["brier"] <= 1.0
+
+
+def test_executable_label_rejects_execution_above_slippage_ceiling():
+    settings = Settings()
+    entry = {"price_usd": 1.0, "liquidity_usd": 100.0}
+    exit_obs = {"price_usd": 3.0, "liquidity_usd": 100.0}
+    uncapped = _roundtrip_return(
+        entry, exit_obs, 10.0, settings.execution, max_slippage_pct=None
+    )
+    capped = _roundtrip_return(
+        entry, exit_obs, 10.0, settings.execution, max_slippage_pct=0.01
+    )
+    assert uncapped is not None
+    assert capped is None
+
+
+
+def test_label_availability_purge_removes_boundary_leakage():
+    times = pd.to_datetime([
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:30:00Z",
+        "2026-01-01T01:00:00Z",
+    ])
+    df = pd.DataFrame({"decision_time": times})
+    prepared = _with_label_availability(df, default_horizon_seconds=3600)
+    boundary = pd.Timestamp("2026-01-01T01:30:00Z")
+    eligible = _purge_before_boundary(prepared, boundary)
+    assert list(eligible["decision_time"]) == [pd.Timestamp("2026-01-01T00:00:00Z")]
+    assert all(eligible["label_available_at"] < boundary)
+
+
+
+def test_classification_metrics_include_calibration_and_top_n():
+    y = np.array([1, 0, 1, 0, 1, 0], dtype=int)
+    p = np.array([0.95, 0.80, 0.75, 0.20, 0.65, 0.10], dtype=float)
+    metrics = _safe_metric(y, p)
+    assert 0.0 <= metrics["precision_0_5"] <= 1.0
+    assert 0.0 <= metrics["recall_0_5"] <= 1.0
+    assert 0.0 <= metrics["f1_0_5"] <= 1.0
+    assert 0.0 <= metrics["precision_at_10pct"] <= 1.0
+    assert 0.0 <= metrics["ece_10bin"] <= 1.0
+    assert metrics["false_positive"] == 1.0
+
+
+
+def test_right_censored_decision_is_not_labelable():
+    cfg = ExecutableLabelConfig(horizons_seconds=(900, 1800, 3600))
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert not _label_horizon_fully_observed(
+        t0,
+        t0 + timedelta(minutes=59),
+        cfg,
+    )
+    assert _label_horizon_fully_observed(
+        t0,
+        t0 + timedelta(hours=1),
+        cfg,
+    )
+
+
+
+def test_token_overlap_purge_blocks_same_mint_across_partitions():
+    earlier = pd.DataFrame({
+        "token_mint": ["A", "B", "C"],
+        "decision_time": pd.to_datetime([
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:01:00Z",
+            "2026-01-01T00:02:00Z",
+        ]),
+    })
+    future = pd.DataFrame({
+        "token_mint": ["B", "D"],
+        "decision_time": pd.to_datetime([
+            "2026-01-01T01:00:00Z",
+            "2026-01-01T01:01:00Z",
+        ]),
+    })
+    purged = _purge_token_overlap(earlier, future)
+    assert list(purged["token_mint"]) == ["A", "C"]
+
+
+def test_token_balanced_weights_prevent_high_event_token_domination():
+    frame = pd.DataFrame({"token_mint": ["A", "A", "A", "B"]})
+    weights = _token_balanced_weights(frame)
+    a_total = float(weights[:3].sum())
+    b_total = float(weights[3])
+    assert abs(a_total - b_total) < 1e-12
+    assert abs(float(weights.mean()) - 1.0) < 1e-12
+
+
+
+def test_training_fee_context_persists_after_pump_migration():
+    settings = Settings()
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    row = EventRow(
+        event_id="price-after-migration",
+        timestamp=t0 + timedelta(minutes=5),
+        token_mint="M",
+        event_type="PRICE",
+        wallet=None,
+        source="test",
+        asset_match_verified=True,
+        payload_json='{"event_id":"price-after-migration","timestamp":"2026-01-01T00:05:00Z","token_mint":"M","event_type":"PRICE","price_usd":1.0,"liquidity_usd":100000.0,"market_cap_usd":550000.0,"asset_match_verified":true,"metadata":{}}',
+    )
+    obs = _event_observation(
+        row,
+        settings.execution,
+        lifecycle_metadata={
+            "launchpad": "PUMP_FUN",
+            "protocol": "PUMPSWAP",
+            "quote_asset": "USDC",
+            "pump_pool_canonical": True,
+        },
+        migration_at=t0,
+    )
+    assert obs is not None
+    assert obs["protocol_fee_bps"] == 110.0
+    assert obs["fee_source"] == "PUMPSWAP_CANONICAL_USDC"
