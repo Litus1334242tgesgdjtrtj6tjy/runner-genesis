@@ -1,5 +1,7 @@
 mode: PAPER
 live_trading: false
+network: solana
+paper_timezone: Europe/Madrid
 paper_starting_capital_eur: 300.0
 currency: EUR
 
