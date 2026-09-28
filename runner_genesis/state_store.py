@@ -68,7 +68,8 @@ class MarketStateStore:
             "sellability_score", "deployer_risk_score", "protocol", "launchpad",
             "pool_address", "bundle_count", "sniper_count",
             "quote_asset", "quote_mint", "sol_usd", "pump_pool_canonical",
-            "pool_kind", "dexscreener_dex", "program", "program_id",
+            "pool_kind", "dexscreener_dex", "dexscreener_url", "program", "program_id",
+            "token_name", "token_symbol", "token_image_url",
         ):
             if key in e.metadata and e.metadata[key] is not None:
                 t.metadata[key] = e.metadata[key]
