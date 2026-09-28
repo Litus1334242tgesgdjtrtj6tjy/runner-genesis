@@ -38,6 +38,7 @@ class MarketEvent(BaseModel):
     slot: int | None = None
     tx_signature: str | None = None
     token_mint: str
+    chain: str = "solana"
     wallet: str | None = None
     counterparty: str | None = None
     actor_id: str | None = None
@@ -55,6 +56,13 @@ class MarketEvent(BaseModel):
     data_quality_score: float | None = None
     asset_match_verified: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("chain")
+    @classmethod
+    def solana_chain_only(cls, value: str) -> str:
+        if str(value).lower() != "solana":
+            raise ValueError("only Solana market events are supported")
+        return "solana"
 
     @field_validator("timestamp")
     @classmethod
