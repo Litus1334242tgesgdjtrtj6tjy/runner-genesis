@@ -128,6 +128,9 @@ class DexScreenerEnricher:
                 e.price_usd is None
                 or e.liquidity_usd is None
                 or e.market_cap_usd is None
+                or not e.metadata.get('token_name')
+                or not e.metadata.get('token_symbol')
+                or not e.metadata.get('token_image_url')
             )
             if needs_market:
                 pairs=await self._pairs(e.token_mint)
@@ -145,6 +148,16 @@ class DexScreenerEnricher:
                             e.market_cap_usd=float(mc)
                         if p.get('pairCreatedAt') and e.token_age_seconds is None:
                             e.token_age_seconds=max(0.0,e.timestamp.timestamp()-float(p['pairCreatedAt'])/1000.0)
+                        base = p.get('baseToken') or {}
+                        info = p.get('info') or {}
+                        if base.get('name'):
+                            e.metadata['token_name'] = str(base['name'])
+                        if base.get('symbol'):
+                            e.metadata['token_symbol'] = str(base['symbol'])
+                        if info.get('imageUrl'):
+                            e.metadata['token_image_url'] = str(info['imageUrl'])
+                        if p.get('url'):
+                            e.metadata['dexscreener_url'] = str(p['url'])
                         e.metadata['dexscreener_pair']=p.get('pairAddress')
                         e.metadata['dexscreener_dex']=p.get('dexId')
 
