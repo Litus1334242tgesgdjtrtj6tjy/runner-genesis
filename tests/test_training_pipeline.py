@@ -14,6 +14,8 @@ from runner_genesis.training import (
     walk_forward_evaluate,
     _with_label_availability,
     _purge_before_boundary,
+    _purge_token_overlap,
+    _token_balanced_weights,
     _safe_metric,
     _label_horizon_fully_observed,
 )
@@ -143,3 +145,33 @@ def test_right_censored_decision_is_not_labelable():
         t0 + timedelta(hours=1),
         cfg,
     )
+
+
+
+def test_token_overlap_purge_blocks_same_mint_across_partitions():
+    earlier = pd.DataFrame({
+        "token_mint": ["A", "B", "C"],
+        "decision_time": pd.to_datetime([
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:01:00Z",
+            "2026-01-01T00:02:00Z",
+        ]),
+    })
+    future = pd.DataFrame({
+        "token_mint": ["B", "D"],
+        "decision_time": pd.to_datetime([
+            "2026-01-01T01:00:00Z",
+            "2026-01-01T01:01:00Z",
+        ]),
+    })
+    purged = _purge_token_overlap(earlier, future)
+    assert list(purged["token_mint"]) == ["A", "C"]
+
+
+def test_token_balanced_weights_prevent_high_event_token_domination():
+    frame = pd.DataFrame({"token_mint": ["A", "A", "A", "B"]})
+    weights = _token_balanced_weights(frame)
+    a_total = float(weights[:3].sum())
+    b_total = float(weights[3])
+    assert abs(a_total - b_total) < 1e-12
+    assert abs(float(weights.mean()) - 1.0) < 1e-12
