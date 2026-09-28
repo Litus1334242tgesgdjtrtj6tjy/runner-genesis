@@ -167,15 +167,18 @@ class WalletResearchBackfillService:
         apply_funding: bool = True,
         state_lock=None,
     ) -> BackfillResult:
-        if apply_actor_events:
-            if hasattr(actor, "observe_historical_batch"):
-                actor.observe_historical_batch(bundle.events)
-            else:
-                for event in bundle.events:
-                    actor.observe(event)
-        if apply_funding:
-            for link in bundle.funding_links:
-                actor.observe_funding_link(link.wallet, link.funder, link.timestamp, link.confidence)
+        with (state_lock if state_lock is not None else nullcontext()):
+            if apply_actor_events:
+                if hasattr(actor, "observe_historical_batch"):
+                    actor.observe_historical_batch(bundle.events)
+                else:
+                    for event in bundle.events:
+                        actor.observe(event)
+            if apply_funding:
+                for link in bundle.funding_links:
+                    actor.observe_funding_link(
+                        link.wallet, link.funder, link.timestamp, link.confidence
+                    )
 
         replay_events = list(bundle.events)
         resolved_outcomes = list(bundle.outcomes)
