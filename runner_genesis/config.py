@@ -161,6 +161,8 @@ class Settings(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
     mode: str = "PAPER"
     live_trading: bool = False
+    network: str = "solana"
+    paper_timezone: str = "Europe/Madrid"
     paper_starting_capital_eur: float = 300.0
     currency: str = "EUR"
     features: dict[str, Any] = Field(default_factory=dict)
@@ -182,6 +184,13 @@ class Settings(BaseModel):
     helius_api_key: str | None = None
     fomoscan_api_key: str | None = None
     fomoscan_base_url: str = "https://api.fomoscan.sh"
+
+    @field_validator("network")
+    @classmethod
+    def solana_only(cls, value: str) -> str:
+        if str(value).lower() != "solana":
+            raise ValueError("Runner Genesis PAPER supports Solana only")
+        return "solana"
 
     @field_validator("live_trading")
     @classmethod
