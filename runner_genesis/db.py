@@ -344,7 +344,7 @@ class RuntimeRepository:
                 )
                 s.add(row)
             else:
-                row.observed_at = max(row.observed_at, observed_at)
+                row.observed_at = observed_at
                 row.name = str(name) if name else row.name
                 row.symbol = str(symbol) if symbol else row.symbol
                 row.image_url = str(image_url) if image_url else row.image_url
@@ -415,6 +415,23 @@ class RuntimeRepository:
                 'realized_pnl_eur': row.realized_pnl_eur,
                 'unrealized_pnl_eur': row.unrealized_pnl_eur,
             } for row in reversed(rows)]
+
+    def load_first_equity_snapshot(self) -> dict | None:
+        with self._session() as s:
+            row = s.execute(
+                select(PaperEquitySnapshotRow)
+                .order_by(PaperEquitySnapshotRow.observed_at.asc(), PaperEquitySnapshotRow.id.asc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            return {
+                'observed_at': row.observed_at,
+                'equity_eur': row.equity_eur,
+                'cash_eur': row.cash_eur,
+                'realized_pnl_eur': row.realized_pnl_eur,
+                'unrealized_pnl_eur': row.unrealized_pnl_eur,
+            }
 
     def load_equity_snapshot_at_or_before(self, observed_at: datetime) -> dict | None:
         with self._session() as s:
