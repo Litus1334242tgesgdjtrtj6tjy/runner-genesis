@@ -145,6 +145,8 @@ helius_history:
   enabled: true
   page_limit: 100
   max_pages: 5
+  bootstrap_max_pages: 10
+  lookback_days: 30
   min_funding_sol: 0.01
   refresh_seconds: 21600
   max_concurrency: 4
