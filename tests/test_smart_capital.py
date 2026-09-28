@@ -372,3 +372,65 @@ def test_paged_backfill_rebuilds_wallet_in_global_chronological_order():
     p2 = smart.positions[("W", "M")]
     assert p2.buy_count == 2
     assert p2.sell_count == 1
+
+
+
+def test_sol_quoted_history_supports_relative_conviction_without_fake_fx():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    smart = SmartCapitalEngine(
+        SmartCapitalConfig(),
+        WalletQualityEngine(),
+        PumpDiscoveryEngine(PumpDiscoveryConfig()),
+    )
+    store = MarketStateStore()
+
+    for i, sol_size in enumerate([0.5, 1.0, 2.0]):
+        event = MarketEvent(
+            event_id=f"sol-{i}",
+            timestamp=t0 + timedelta(minutes=i),
+            token_mint=f"M{i}",
+            wallet="W",
+            event_type=EventType.BUY,
+            amount_token=100.0,
+            sol_value=sol_size,
+            asset_match_verified=True,
+        )
+        smart.observe(event)
+
+    p = smart.positions[("W", "M2")]
+    score, confidence = smart.conviction(p, store)
+    assert score > 0.5
+    assert confidence > 0.0
+    assert p.buy_sizes_usd == []
+    assert p.buy_sizes_sol == [2.0]
+
+
+def test_sol_smart_capital_converts_to_usd_only_with_known_sol_price():
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    smart = SmartCapitalEngine(
+        SmartCapitalConfig(),
+        WalletQualityEngine(),
+        PumpDiscoveryEngine(PumpDiscoveryConfig()),
+    )
+    store = MarketStateStore()
+    actor = ActorGraphEngine()
+    buy = MarketEvent(
+        event_id="sol-buy",
+        timestamp=t0,
+        token_mint="M",
+        wallet="W",
+        event_type=EventType.BUY,
+        amount_token=100.0,
+        sol_value=1.0,
+        price_usd=1.0,
+        market_cap_usd=100000.0,
+        liquidity_usd=50000.0,
+        asset_match_verified=True,
+        metadata={"sol_usd": 200.0},
+    )
+    store.apply(buy)
+    actor.observe(buy)
+    smart.observe(buy)
+    features = smart.token_features("M", t0, store, actor)
+    assert abs(features["total_smart_capital_sol"] - 1.0) < 1e-12
+    assert abs(features["total_smart_capital_usd"] - 200.0) < 1e-12
