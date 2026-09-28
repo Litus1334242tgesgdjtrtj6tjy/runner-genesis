@@ -178,6 +178,7 @@ class WalletResearchBackfillService:
         if smart is not None and hasattr(smart, "observe_historical_batch"):
             smart.observe_historical_batch(bundle.events)
 
+        replay_events = list(bundle.events)
         resolved_outcomes = list(bundle.outcomes)
         if self.repository:
             for event in bundle.events:
@@ -203,6 +204,9 @@ class WalletResearchBackfillService:
                 if replay_events:
                     resolved_outcomes = self.outcomes.build(replay_events)
 
+        if smart is not None and hasattr(smart, "observe_historical_batch") and replay_events:
+            smart.observe_historical_batch(replay_events)
+
         added = (
             store.backfill_wallet_observations(bundle.wallet, resolved_outcomes)
             if resolved_outcomes else 0
@@ -212,9 +216,9 @@ class WalletResearchBackfillService:
                 self.repository.record_funding_relationship(link)
             for obs in resolved_outcomes:
                 self.repository.record_wallet_outcome(bundle.wallet, obs)
-            if smart is not None and bundle.events:
+            if smart is not None and replay_events:
                 latest_by_mint: dict[str, datetime] = {}
-                for event in bundle.events:
+                for event in replay_events:
                     current = latest_by_mint.get(event.token_mint)
                     if current is None or event.timestamp > current:
                         latest_by_mint[event.token_mint] = event.timestamp
