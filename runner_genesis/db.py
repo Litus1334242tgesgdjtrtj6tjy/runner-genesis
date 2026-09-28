@@ -19,6 +19,27 @@ class RuntimeCheckpointRow(Base):
     payload_json: Mapped[str] = mapped_column(Text)
 
 
+class TokenMetadataRow(Base):
+    __tablename__ = 'token_metadata'
+    token_mint: Mapped[str] = mapped_column(String(128), primary_key=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    symbol: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dex_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
+class PaperEquitySnapshotRow(Base):
+    __tablename__ = 'paper_equity_snapshots'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    equity_eur: Mapped[float] = mapped_column(Float)
+    cash_eur: Mapped[float] = mapped_column(Float)
+    realized_pnl_eur: Mapped[float] = mapped_column(Float)
+    unrealized_pnl_eur: Mapped[float] = mapped_column(Float)
+
+
 class EventRow(Base):
     __tablename__ = 'events'
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -300,6 +321,118 @@ class RuntimeRepository:
         with self._session() as s:
             row = s.get(RuntimeCheckpointRow, 'paper')
             return json.loads(row.payload_json) if row is not None else None
+
+    def record_token_metadata(self, mint: str, observed_at: datetime, payload: dict) -> None:
+        payload = dict(payload or {})
+        name = payload.get('token_name') or payload.get('name')
+        symbol = payload.get('token_symbol') or payload.get('symbol')
+        image_url = payload.get('token_image_url') or payload.get('image_url')
+        dex_url = payload.get('dexscreener_url')
+        if not any((name, symbol, image_url, dex_url)):
+            return
+        with self._session() as s:
+            row = s.get(TokenMetadataRow, str(mint))
+            if row is None:
+                row = TokenMetadataRow(
+                    token_mint=str(mint),
+                    observed_at=observed_at,
+                    name=str(name) if name else None,
+                    symbol=str(symbol) if symbol else None,
+                    image_url=str(image_url) if image_url else None,
+                    dex_url=str(dex_url) if dex_url else None,
+                    payload_json=_json(payload),
+                )
+                s.add(row)
+            else:
+                row.observed_at = max(row.observed_at, observed_at)
+                row.name = str(name) if name else row.name
+                row.symbol = str(symbol) if symbol else row.symbol
+                row.image_url = str(image_url) if image_url else row.image_url
+                row.dex_url = str(dex_url) if dex_url else row.dex_url
+                merged = {}
+                try:
+                    merged = json.loads(row.payload_json) if row.payload_json else {}
+                except Exception:
+                    merged = {}
+                merged.update({k: v for k, v in payload.items() if v is not None})
+                row.payload_json = _json(merged)
+            self._commit(s)
+
+    def load_token_metadata(self, limit: int = 100_000) -> list[dict]:
+        with self._session() as s:
+            rows = s.execute(
+                select(TokenMetadataRow)
+                .order_by(TokenMetadataRow.observed_at.desc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            out = []
+            for row in rows:
+                try:
+                    payload = json.loads(row.payload_json) if row.payload_json else {}
+                except Exception:
+                    payload = {}
+                payload.update({
+                    'token_name': row.name,
+                    'token_symbol': row.symbol,
+                    'token_image_url': row.image_url,
+                    'dexscreener_url': row.dex_url,
+                })
+                out.append({
+                    'token_mint': row.token_mint,
+                    'observed_at': row.observed_at,
+                    'metadata': payload,
+                })
+            return out
+
+    def record_equity_snapshot(self, observed_at: datetime, account, marks: dict[str, float]) -> None:
+        position_value = 0.0
+        position_cost = 0.0
+        for mint, position in account.positions.items():
+            price = float(marks.get(mint, position.avg_entry_price))
+            position_value += float(position.quantity) * price
+            position_cost += float(position.cost_basis_eur)
+        with self._session() as s:
+            s.add(PaperEquitySnapshotRow(
+                observed_at=observed_at,
+                equity_eur=float(account.equity_eur),
+                cash_eur=float(account.cash_eur),
+                realized_pnl_eur=float(account.realized_pnl_eur),
+                unrealized_pnl_eur=float(position_value - position_cost),
+            ))
+            self._commit(s)
+
+    def load_equity_snapshots(self, limit: int = 1_000) -> list[dict]:
+        with self._session() as s:
+            rows = s.execute(
+                select(PaperEquitySnapshotRow)
+                .order_by(PaperEquitySnapshotRow.observed_at.desc(), PaperEquitySnapshotRow.id.desc())
+                .limit(max(1, int(limit)))
+            ).scalars().all()
+            return [{
+                'observed_at': row.observed_at,
+                'equity_eur': row.equity_eur,
+                'cash_eur': row.cash_eur,
+                'realized_pnl_eur': row.realized_pnl_eur,
+                'unrealized_pnl_eur': row.unrealized_pnl_eur,
+            } for row in reversed(rows)]
+
+    def load_equity_snapshot_at_or_before(self, observed_at: datetime) -> dict | None:
+        with self._session() as s:
+            row = s.execute(
+                select(PaperEquitySnapshotRow)
+                .where(PaperEquitySnapshotRow.observed_at <= observed_at)
+                .order_by(PaperEquitySnapshotRow.observed_at.desc(), PaperEquitySnapshotRow.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            return {
+                'observed_at': row.observed_at,
+                'equity_eur': row.equity_eur,
+                'cash_eur': row.cash_eur,
+                'realized_pnl_eur': row.realized_pnl_eur,
+                'unrealized_pnl_eur': row.unrealized_pnl_eur,
+            }
 
     def record_event(self, e) -> None:
         with self._session() as s:
