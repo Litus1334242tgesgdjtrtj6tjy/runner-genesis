@@ -39,7 +39,7 @@ async def run_shadow(settings: Settings, programs: list[str] | None = None):
     api_url = os.getenv('RUNNER_API_URL', 'http://127.0.0.1:8000')
     sub = HeliusParsedStreamSubscriber(api_key, programs or [PUMP_PROGRAM, PUMPSWAP_PROGRAM])
     norm = HeliusOnChainNormalizer()
-    enrich = DexScreenerEnricher()
+    enrich = DexScreenerEnricher(include_identity=True)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
