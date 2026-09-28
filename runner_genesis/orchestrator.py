@@ -69,6 +69,7 @@ class RunnerGenesisOmega:
         self.settings = settings
         self.failed = False
         self._watermark: datetime | None = None
+        self._last_equity_snapshot_at: datetime | None = None
         self.state_lock = threading.RLock()
         self.store = MarketStateStore()
         self.candidate_gate = CandidateUniverseGate()
@@ -122,11 +123,13 @@ class RunnerGenesisOmega:
         db_enabled = bool(settings.features.get('database_persistence', {}).get('enabled', True))
         self.repository = RuntimeRepository(settings.database_url) if db_enabled else None
         if self.repository:
+            self._hydrate_token_metadata()
             self._hydrate_processed_event_ids()
             self._hydrate_research_state()
             self._hydrate_paper_portfolio()
             self._hydrate_pending_paper()
             self._hydrate_checkpoint()
+            self._hydrate_equity_snapshot_state()
 
     def _hydrate_checkpoint(self) -> None:
         checkpoint = self.repository.load_checkpoint()
@@ -163,6 +166,40 @@ class RunnerGenesisOmega:
         return {'version': 1, 'watermark': self._watermark,
                 'account': asdict(self.portfolio.account), 'marks': self.portfolio.marks,
                 'pending_orders': {mint: asdict(order) for mint, order in self.pending_orders.items()}}
+
+    def _hydrate_token_metadata(self) -> None:
+        if not self.repository or not hasattr(self.repository, 'load_token_metadata'):
+            return
+        for row in self.repository.load_token_metadata(limit=100_000):
+            mint = str(row.get('token_mint') or '')
+            if not mint:
+                continue
+            self.store.token(mint).metadata.update(dict(row.get('metadata') or {}))
+
+    def _hydrate_equity_snapshot_state(self) -> None:
+        if not self.repository or not hasattr(self.repository, 'load_equity_snapshots'):
+            return
+        rows = self.repository.load_equity_snapshots(limit=1)
+        if rows:
+            self._last_equity_snapshot_at = self._aware(rows[-1]['observed_at'])
+            return
+        now = datetime.now(timezone.utc)
+        self.repository.record_equity_snapshot(now, self.portfolio.account, self.portfolio.marks)
+        self._last_equity_snapshot_at = now
+
+    def _persist_equity_snapshot(self, at: datetime, force: bool = False) -> None:
+        if not self.repository or not hasattr(self.repository, 'record_equity_snapshot'):
+            return
+        at = self._aware(at)
+        due = (
+            self._last_equity_snapshot_at is None
+            or at >= self._last_equity_snapshot_at + timedelta(seconds=15)
+        )
+        if not (force or due):
+            return
+        self.repository.record_equity_snapshot(at, self.portfolio.account, self.portfolio.marks)
+        if self._last_equity_snapshot_at is None or at > self._last_equity_snapshot_at:
+            self._last_equity_snapshot_at = at
 
     @staticmethod
     def _aware(ts: datetime) -> datetime:
@@ -500,9 +537,12 @@ class RunnerGenesisOmega:
                             probabilities={}, action='IGNORED_OUT_OF_ORDER', reasons=['OUT_OF_ORDER'],
                         )
                         return ProcessResult(snapshot, None, False, ['OUT_OF_ORDER'])
+                    if self.repository and hasattr(self.repository, 'record_token_metadata'):
+                        self.repository.record_token_metadata(e.token_mint, e.timestamp, e.metadata)
                     result = self._process_state_locked(e)
                     self._watermark = e.timestamp
                     if self.repository:
+                        self._persist_equity_snapshot(e.timestamp, force=result.fill is not None)
                         self.repository.record_checkpoint(self._checkpoint())
                     return result
             except Exception:
