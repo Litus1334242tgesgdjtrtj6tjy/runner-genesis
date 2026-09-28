@@ -441,14 +441,17 @@ class ResearchSyncCoordinator:
                 qualification_by_wallet[wallet] = merged
 
         now = datetime.now(timezone.utc)
-        min_age = max(60.0, float(self.settings.helius_history.refresh_seconds))
+        normal_min_age = max(60.0, float(self.settings.helius_history.refresh_seconds))
+        bootstrap_min_age = max(60.0, float(self.settings.helius_history.bootstrap_refresh_seconds))
         skipped_recent = 0
 
-        # Remove recently-qualified wallets before ranking so they do not consume one of
-        # the scarce Helius slots and leave budget unused.
+        # Completed histories use the slower normal refresh cadence. Incomplete 30d
+        # bootstraps may continue sooner, but still have an explicit budget cooldown.
         eligible: dict[str, dict[str, Any]] = {}
         for wallet, row in qualification_by_wallet.items():
             previous = self._last_backfill.get(wallet)
+            complete = wallet in self._history_target_reached
+            min_age = normal_min_age if complete else bootstrap_min_age
             if previous is not None and (now - previous).total_seconds() < min_age:
                 skipped_recent += 1
                 continue
