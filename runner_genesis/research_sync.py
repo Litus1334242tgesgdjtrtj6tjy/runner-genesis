@@ -516,16 +516,24 @@ class ResearchSyncCoordinator:
                     (event for bundle in bundles for event in bundle.events),
                     key=lambda event: (event.timestamp, event.event_id),
                 )
-                self.engine.actor.observe_historical_batch(actor_events)
-
                 funding_links = sorted(
                     (link for bundle in bundles for link in bundle.funding_links),
                     key=lambda link: (link.timestamp, link.wallet, link.funder),
                 )
-                for link in funding_links:
-                    self.engine.actor.observe_funding_link(
-                        link.wallet, link.funder, link.timestamp, link.confidence
-                    )
+                state_lock = getattr(self.engine, "state_lock", None)
+                if state_lock is not None:
+                    with state_lock:
+                        self.engine.actor.observe_historical_batch(actor_events)
+                        for link in funding_links:
+                            self.engine.actor.observe_funding_link(
+                                link.wallet, link.funder, link.timestamp, link.confidence
+                            )
+                else:
+                    self.engine.actor.observe_historical_batch(actor_events)
+                    for link in funding_links:
+                        self.engine.actor.observe_funding_link(
+                            link.wallet, link.funder, link.timestamp, link.confidence
+                        )
 
                 for wallet, bundle, error in fetched:
                     if error is not None:
@@ -538,6 +546,7 @@ class ResearchSyncCoordinator:
                         smart=self.engine.smart,
                         apply_actor_events=False,
                         apply_funding=False,
+                        state_lock=getattr(self.engine, "state_lock", None),
                     )
                     result_payload = asdict(result)
                     backfills.append(result_payload)
