@@ -19,11 +19,13 @@ class DexScreenerEnricher:
         timeout: float = 5.0,
         max_concurrency: int = 4,
         max_retries: int = 2,
+        include_identity: bool = False,
     ):
         self.ttl=float(ttl_seconds)
         self.sol_ttl=float(sol_ttl_seconds)
         self.timeout=float(timeout)
         self.max_retries=max(0,int(max_retries))
+        self.include_identity=bool(include_identity)
         self.cache={}
         self.sol_cache=(0.0,None)
         self._client: httpx.AsyncClient | None = None
@@ -128,9 +130,14 @@ class DexScreenerEnricher:
                 e.price_usd is None
                 or e.liquidity_usd is None
                 or e.market_cap_usd is None
-                or not e.metadata.get('token_name')
-                or not e.metadata.get('token_symbol')
-                or not e.metadata.get('token_image_url')
+                or (
+                    self.include_identity
+                    and (
+                        not e.metadata.get('token_name')
+                        or not e.metadata.get('token_symbol')
+                        or not e.metadata.get('token_image_url')
+                    )
+                )
             )
             if needs_market:
                 pairs=await self._pairs(e.token_mint)
