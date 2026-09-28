@@ -54,6 +54,11 @@ class PortfolioLedger:
                     p.risk_cluster_fraction = 0.0
             if old_value > 0:
                 p.adds += 1
+            # Any new risk invalidates a previous absolute moonbag target; if the
+            # position later de-risks again, a fresh target is anchored to the new size.
+            if getattr(fill, 'proposal_action', None) in {'ENTER', 'ADD'}:
+                p.moonbag_target_quantity = 0.0
+                p.moonbag_locked_fraction = 0.0
             a.cash_eur -= total_cost
             a.daily_spend_eur += total_cost
             return True
@@ -61,10 +66,17 @@ class PortfolioLedger:
             p = a.positions.get(fill.token_mint)
             if not p:
                 return False
-            qty = min(p.quantity, fill.quantity)
+            before_qty = float(p.quantity)
+            qty = min(before_qty, fill.quantity)
             if qty <= 0:
                 return False
             self.fills.append(fill)
+
+            if getattr(fill, 'proposal_action', None) == 'KEEP_RUNNER_BAG':
+                reduce_fraction = max(0.0, min(1.0, float(getattr(fill, 'proposal_reduce_fraction', 0.0) or 0.0)))
+                if p.moonbag_target_quantity <= 0 and reduce_fraction > 0:
+                    p.moonbag_target_quantity = max(0.0, before_qty * (1.0 - reduce_fraction))
+
             fee_fraction = qty / max(fill.quantity, 1e-12)
             proceeds = qty * fill.execution_price - fill.fees_eur * fee_fraction
             avg_cost_per_unit = p.cost_basis_eur / max(p.quantity, 1e-12)
@@ -77,6 +89,8 @@ class PortfolioLedger:
             a.realized_pnl_eur += pnl
             a.daily_realized_pnl_eur += pnl
             p.last_updated_at = fill.timestamp
+            if p.moonbag_target_quantity > 0 and p.quantity <= p.moonbag_target_quantity * (1.0 + 1e-9):
+                p.moonbag_locked_fraction = 1.0
             if p.quantity <= 1e-12:
                 del a.positions[fill.token_mint]
             return True
