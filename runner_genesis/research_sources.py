@@ -45,6 +45,7 @@ class BackfillResult:
     oldest_transaction_at: datetime | None = None
     requested_stop_before: datetime | None = None
     history_target_reached: bool = False
+    next_before_signature: str | None = None
 
 
 @dataclass
@@ -56,6 +57,8 @@ class WalletResearchBundle:
     outcomes: list[Any]
     requested_stop_before: datetime | None = None
     oldest_transaction_at: datetime | None = None
+    start_before_signature: str | None = None
+    oldest_signature: str | None = None
 
 
 class WalletResearchBackfillService:
@@ -86,12 +89,14 @@ class WalletResearchBackfillService:
         limit: int = 100,
         max_pages: int = 5,
         stop_before_time: datetime | None = None,
+        before: str | None = None,
     ) -> WalletResearchBundle:
         txs = await self.client.fetch_transactions(
             wallet,
             limit=limit,
             max_pages=max_pages,
             stop_before_time=stop_before_time,
+            before=before,
         )
         events = []
         funding = []
@@ -115,6 +120,8 @@ class WalletResearchBackfillService:
             outcomes=resolved,
             requested_stop_before=stop_before_time,
             oldest_transaction_at=oldest,
+            start_before_signature=before,
+            oldest_signature=(str(txs[-1].get("signature")) if txs and txs[-1].get("signature") else None),
         )
 
     def apply_bundle(
@@ -174,6 +181,7 @@ class WalletResearchBackfillService:
             oldest_transaction_at=oldest,
             requested_stop_before=target,
             history_target_reached=target_reached,
+            next_before_signature=(None if target_reached else bundle.oldest_signature),
         )
 
     async def backfill_wallet(
@@ -186,12 +194,14 @@ class WalletResearchBackfillService:
         limit: int = 100,
         max_pages: int = 5,
         stop_before_time: datetime | None = None,
+        before: str | None = None,
     ) -> BackfillResult:
         bundle = await self.fetch_wallet_bundle(
             wallet,
             limit=limit,
             max_pages=max_pages,
             stop_before_time=stop_before_time,
+            before=before,
         )
         return self.apply_bundle(bundle, store, actor, smart=smart)
 
