@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import asyncio
+import inspect
 from datetime import datetime, timezone
 from typing import Any
 
@@ -91,13 +92,22 @@ class WalletResearchBackfillService:
         stop_before_time: datetime | None = None,
         before: str | None = None,
     ) -> WalletResearchBundle:
-        txs = await self.client.fetch_transactions(
-            wallet,
-            limit=limit,
-            max_pages=max_pages,
-            stop_before_time=stop_before_time,
-            before=before,
-        )
+        fetch_kwargs = {
+            "limit": limit,
+            "max_pages": max_pages,
+            "stop_before_time": stop_before_time,
+            "before": before,
+        }
+        try:
+            params = inspect.signature(self.client.fetch_transactions).parameters
+            supports_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
+            if not supports_kwargs:
+                fetch_kwargs = {k: v for k, v in fetch_kwargs.items() if k in params}
+        except (TypeError, ValueError):
+            pass
+        txs = await self.client.fetch_transactions(wallet, **fetch_kwargs)
         events = []
         funding = []
         for tx in txs:
