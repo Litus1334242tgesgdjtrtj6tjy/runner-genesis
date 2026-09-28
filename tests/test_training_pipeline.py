@@ -4,11 +4,13 @@ import numpy as np
 import pandas as pd
 
 from runner_genesis.config import Settings
+from runner_genesis.db import EventRow
 from runner_genesis.engines.genesis import FEATURE_ORDER, RunnerGenesisModel
 from runner_genesis.training import (
     ExecutableLabelConfig,
     TARGETS,
     _future_labels,
+    _event_observation,
     _roundtrip_return,
     train_genesis_from_dataset,
     walk_forward_evaluate,
@@ -175,3 +177,33 @@ def test_token_balanced_weights_prevent_high_event_token_domination():
     b_total = float(weights[3])
     assert abs(a_total - b_total) < 1e-12
     assert abs(float(weights.mean()) - 1.0) < 1e-12
+
+
+
+def test_training_fee_context_persists_after_pump_migration():
+    settings = Settings()
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    row = EventRow(
+        event_id="price-after-migration",
+        timestamp=t0 + timedelta(minutes=5),
+        token_mint="M",
+        event_type="PRICE",
+        wallet=None,
+        source="test",
+        asset_match_verified=True,
+        payload_json='{"event_id":"price-after-migration","timestamp":"2026-01-01T00:05:00Z","token_mint":"M","event_type":"PRICE","price_usd":1.0,"liquidity_usd":100000.0,"market_cap_usd":550000.0,"asset_match_verified":true,"metadata":{}}',
+    )
+    obs = _event_observation(
+        row,
+        settings.execution,
+        lifecycle_metadata={
+            "launchpad": "PUMP_FUN",
+            "protocol": "PUMPSWAP",
+            "quote_asset": "USDC",
+            "pump_pool_canonical": True,
+        },
+        migration_at=t0,
+    )
+    assert obs is not None
+    assert obs["protocol_fee_bps"] == 110.0
+    assert obs["fee_source"] == "PUMPSWAP_CANONICAL_USDC"
