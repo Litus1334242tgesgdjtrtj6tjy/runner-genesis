@@ -64,6 +64,7 @@ class PaperPosition:
     realized_pnl_eur: float = 0.0
     adds: int = 0
     moonbag_locked_fraction: float = 0.0
+    moonbag_target_quantity: float = 0.0
     risk_cluster_id: str | None = None
     risk_cluster_fraction: float = 0.0
 
