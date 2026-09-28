@@ -52,11 +52,16 @@ class WalletTokenPosition:
     estimated_liquid_capital_usd: float | None = None
     state: str = "NEW_POSITION"
     buy_sizes_usd: list[float] = field(default_factory=list)
+    buy_sizes_sol: list[float] = field(default_factory=list)
     event_ids: list[str] = field(default_factory=list)
 
     @property
     def current_exposure_usd(self) -> float:
         return max(0.0, self.bought_usd - self.sold_usd)
+
+    @property
+    def current_exposure_sol(self) -> float:
+        return max(0.0, self.invested_sol * self.retained_fraction)
 
     @property
     def retained_fraction(self) -> float:
@@ -148,6 +153,10 @@ class SmartCapitalEngine:
             float(x) for x in (payload.get("buy_sizes_usd") or [])
             if isinstance(x, (int, float)) and float(x) >= 0
         ]
+        p.buy_sizes_sol = [
+            float(x) for x in (payload.get("buy_sizes_sol") or [])
+            if isinstance(x, (int, float)) and float(x) >= 0
+        ]
         p.event_ids = [str(x) for x in (payload.get("event_ids") or []) if x is not None]
         self.positions[(wallet, mint)] = p
 
@@ -220,6 +229,8 @@ class SmartCapitalEngine:
             p.invested_sol += sol
             if usd > 0:
                 p.buy_sizes_usd.append(usd)
+            if sol > 0:
+                p.buy_sizes_sol.append(sol)
             if e.price_usd is not None and e.price_usd > 0:
                 if old_bought_usd > 0 and p.average_entry_price is not None and usd > 0:
                     p.average_entry_price = (
