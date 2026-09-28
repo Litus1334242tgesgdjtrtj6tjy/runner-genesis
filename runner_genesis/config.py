@@ -126,6 +126,8 @@ class HeliusHistoryConfig(BaseModel):
     enabled: bool = True
     page_limit: int = 100
     max_pages: int = 5
+    bootstrap_max_pages: int = 10
+    lookback_days: int = 30
     min_funding_sol: float = 0.01
     refresh_seconds: float = 21600.0
     max_concurrency: int = 4
