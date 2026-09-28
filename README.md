@@ -1,8 +1,8 @@
-# RUNNER GENESIS Ω — v0.2.0-development
+# RUNNER GENESIS Ω — v0.3.0
 
-PAPER/SHADOW/BACKTEST research system for detecting early Solana memecoin runner formation, reconstructing Smart Capital behavior and testing signals against realistic execution frictions.
+PAPER/SHADOW/BACKTEST research system for detecting early Solana memecoin runner formation, reconstructing Smart Capital behavior and testing signals against realistic execution frictions. The default dashboard is now a portfolio-style PAPER profile rather than an engineering console.
 
-**Safety:** `LIVE_TRADING=false` by default. The repository contains no private-key handling and no live order sender.
+**Safety:** `LIVE_TRADING=false` by default. The repository contains no private-key handling and no live order sender. The event/config models are locked to the **Solana** network.
 
 ## Current flow
 
@@ -29,7 +29,9 @@ MiroFish, FlyWire, FOMO and Early Formation are experimental research components
 - persistent PAPER positions/pending signals/research state across restarts;
 - executable-runner labels with right-censor protection;
 - chronological training, label-availability purge, walk-forward evaluation and component ablations;
-- dashboard visibility for candidates, formation, Smart Capital, Pump discovery, clan alpha/risk, MiroFish/FlyWire and PAPER positions.
+- Pump/FOMO-style PAPER account profile with €300 starting balance, equity curve, daily/weekly/monthly/total PnL, realized/unrealized PnL, open positions, closed cycles, fees, win rate and execution history;
+- token name/symbol/profile-image enrichment from exact-mint Solana market metadata, persisted across restarts with deterministic avatar fallback;
+- advanced Radar/System tabs preserve candidate, fusion, Smart Capital, MiroFish/FlyWire and runtime diagnostics.
 
 ## Windows
 
@@ -73,8 +75,8 @@ Do not interpret an untrained research score as a calibrated probability. Experi
 
 ## Tests
 
-Latest verified checkpoint: `be386666df00621902918aed9c818d5c5cd7897d`, GitHub Actions run 264:
-- 108 Python tests passed;
+Current v0.3 profile checkpoint:
+- 156 Python tests passed;
 - demo backtest smoke passed;
 - component ablation smoke passed;
 - frontend production build passed.
