@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import asyncio
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -310,7 +310,11 @@ async def research_backfill_wallet(wallet: str, max_pages: int | None = None):
         engine.actor,
         smart=engine.smart,
         limit=settings.helius_history.page_limit,
-        max_pages=max_pages or settings.helius_history.max_pages,
+        max_pages=max_pages or settings.helius_history.bootstrap_max_pages,
+        stop_before_time=datetime.now(timezone.utc) - timedelta(
+            days=max(1, int(settings.helius_history.lookback_days))
+        ),
+        state_lock=engine.state_lock,
     )
     return result.__dict__
 
