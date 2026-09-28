@@ -38,7 +38,19 @@ class AIPaperTrader:
     def _untrained_entry_allowed(self) -> bool:
         return bool(self.paper_only and getattr(self.cfg, 'allow_untrained_paper_entry', False))
 
-    def decide(self, mint: str, features: dict, probs: dict, alpha: dict, persistence: dict, has_position: bool, current_cost: float = 0.0, adds: int = 0) -> TradeProposal:
+    def decide(
+        self,
+        mint: str,
+        features: dict,
+        probs: dict,
+        alpha: dict,
+        persistence: dict,
+        has_position: bool,
+        current_cost: float = 0.0,
+        adds: int = 0,
+        current_quantity: float = 0.0,
+        moonbag_target_quantity: float = 0.0,
+    ) -> TradeProposal:
         calibrated = probs.get('genesis_prob') is not None
         genesis = float(probs.get('genesis_prob') if calibrated else probs.get('genesis_score') or 0.0)
         research_fusion = float(features.get('fusion_research_score', genesis) or 0.0)
@@ -108,4 +120,33 @@ class AIPaperTrader:
                 return TradeProposal(Action.ADD, mint, self.cfg.default_position_eur * 0.5, confidence=hold, utility=edge, reasons=add_reasons, risks=risks)
         if hold >= self.cfg.min_hold_score:
             return TradeProposal(Action.HOLD, mint, confidence=hold, utility=edge, reasons=reasons, risks=risks)
-        return TradeProposal(Action.KEEP_RUNNER_BAG, mint, reduce_fraction=max(0.0, 1 - self.cfg.moonbag_fraction), confidence=hold, utility=edge, reasons=reasons, risks=risks)
+
+        # KEEP_RUNNER_BAG means "reduce once to a durable target", not "sell the same
+        # fraction on every subsequent event". If a prior partial fill established an
+        # absolute target quantity, only sell the excess above that target.
+        qty = max(0.0, float(current_quantity or 0.0))
+        target_qty = max(0.0, float(moonbag_target_quantity or 0.0))
+        if target_qty > 0 and qty <= target_qty * (1.0 + 1e-9):
+            return TradeProposal(
+                Action.HOLD,
+                mint,
+                confidence=hold,
+                utility=edge,
+                reasons=reasons + ['RUNNER_BAG_TARGET_REACHED'],
+                risks=risks,
+            )
+        if target_qty > 0 and qty > 0:
+            reduce_fraction = max(0.0, min(1.0, (qty - target_qty) / qty))
+        else:
+            reduce_fraction = max(0.0, min(1.0, 1 - self.cfg.moonbag_fraction))
+        if reduce_fraction <= 1e-9:
+            return TradeProposal(Action.HOLD, mint, confidence=hold, utility=edge, reasons=reasons, risks=risks)
+        return TradeProposal(
+            Action.KEEP_RUNNER_BAG,
+            mint,
+            reduce_fraction=reduce_fraction,
+            confidence=hold,
+            utility=edge,
+            reasons=reasons,
+            risks=risks,
+        )
