@@ -23,7 +23,7 @@ app.add_middleware(
     allow_headers=['*'],
 )
 normalizer = HeliusWebhookNormalizer()
-market_enricher = DexScreenerEnricher(ttl_seconds=15.0, sol_ttl_seconds=15.0)
+market_enricher = DexScreenerEnricher(ttl_seconds=15.0, sol_ttl_seconds=15.0, include_identity=True)
 research_sync = ResearchSyncCoordinator(settings, engine)
 _research_stop = asyncio.Event()
 _research_task: asyncio.Task | None = None
