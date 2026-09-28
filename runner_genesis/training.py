@@ -124,7 +124,12 @@ def _numeric_features(snapshot: dict[str, Any]) -> dict[str, float | None]:
     return out
 
 
-def _event_observation(row: EventRow, execution_cfg=None) -> dict[str, Any] | None:
+def _event_observation(
+    row: EventRow,
+    execution_cfg=None,
+    lifecycle_metadata: dict[str, Any] | None = None,
+    migration_at: datetime | None = None,
+) -> dict[str, Any] | None:
     try:
         payload = json.loads(row.payload_json)
     except Exception:
@@ -140,11 +145,14 @@ def _event_observation(row: EventRow, execution_cfg=None) -> dict[str, Any] | No
         return None
     if price is None or liquidity is None or price <= 0 or liquidity <= 0:
         return None
-    meta = dict(payload.get("metadata") or {})
+    meta = dict(lifecycle_metadata or {})
+    meta.update({k: v for k, v in dict(payload.get("metadata") or {}).items() if v is not None})
+    row_is_migration = str(payload.get("event_type") or getattr(row, "event_type", "")) == "MIGRATION"
+    effective_migration_at = _aware(row.timestamp) if row_is_migration else migration_at
     synthetic = SimpleNamespace(
         metadata=meta,
         events=[],
-        migration_at=_aware(row.timestamp) if str(payload.get("event_type") or "") == "MIGRATION" else None,
+        migration_at=effective_migration_at,
         market_cap_usd=payload.get("market_cap_usd"),
     )
     fee_quote = PumpFeeSchedule().quote(synthetic)
@@ -366,8 +374,32 @@ def build_executable_dataset(
 
     observed_event_times = [_aware(row.timestamp) for row in events]
     dataset_observed_until = max(observed_event_times, default=None)
+    fee_context_by_token: dict[str, dict[str, Any]] = {}
+    migration_by_token: dict[str, datetime] = {}
+    persistent_fee_keys = {
+        "launchpad", "protocol", "dexscreener_dex", "program", "program_id",
+        "quote_asset", "quote_mint", "sol_usd", "pump_pool_canonical", "pool_kind",
+    }
     for row in events:
-        obs = _event_observation(row, settings.execution)
+        try:
+            payload = json.loads(row.payload_json)
+        except Exception:
+            payload = {}
+        raw_meta = dict(payload.get("metadata") or {}) if isinstance(payload, dict) else {}
+        context = fee_context_by_token.setdefault(row.token_mint, {})
+        for key in persistent_fee_keys:
+            value = raw_meta.get(key)
+            if value is not None:
+                context[key] = value
+        event_type = str(payload.get("event_type") or getattr(row, "event_type", ""))
+        if event_type == "MIGRATION":
+            migration_by_token[row.token_mint] = _aware(row.timestamp)
+        obs = _event_observation(
+            row,
+            settings.execution,
+            lifecycle_metadata=context,
+            migration_at=migration_by_token.get(row.token_mint),
+        )
         if obs is not None:
             by_token.setdefault(row.token_mint, []).append(obs)
 
