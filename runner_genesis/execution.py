@@ -47,7 +47,7 @@ class PaperExecutionEngine:
         liq=max(liquidity_usd,1.0)
         return self.cfg.base_slippage_bps/10000.0 + self.cfg.mev_adverse_bps/10000.0 + self.cfg.impact_coefficient*(amount_eur/liq)
 
-    def _network_fee_eur(self, token: TokenState) -> float:
+    def estimate_network_fee_eur(self, token: TokenState) -> float:
         meta=dict(token.metadata or {})
         if token.events:
             meta.update({k:v for k,v in (getattr(token.events[-1],'metadata',{}) or {}).items() if v is not None})
@@ -76,7 +76,7 @@ class PaperExecutionEngine:
         reduce_fraction=max(0.0,min(1.0,float(p.reduce_fraction or 1.0)))
         target_qty=max(0.0,float(position_quantity))*reduce_fraction if side=='SELL' else 0.0
         requested=float(p.amount_eur) if side=='BUY' else target_qty*price
-        network_fee=self._network_fee_eur(token)
+        network_fee=self.estimate_network_fee_eur(token)
         if failed:
             return PaperFill(
                 p.token_mint,side,requested,0,0,price,price,0,network_fee,latency,
