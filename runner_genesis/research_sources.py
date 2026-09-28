@@ -46,6 +46,7 @@ class BackfillResult:
     oldest_transaction_at: datetime | None = None
     requested_stop_before: datetime | None = None
     history_target_reached: bool = False
+    history_exhausted: bool = False
     next_before_signature: str | None = None
 
 
@@ -60,6 +61,7 @@ class WalletResearchBundle:
     oldest_transaction_at: datetime | None = None
     start_before_signature: str | None = None
     oldest_signature: str | None = None
+    history_exhausted: bool = False
 
 
 class WalletResearchBackfillService:
@@ -116,12 +118,29 @@ class WalletResearchBackfillService:
         events.sort(key=lambda x: x.timestamp)
         funding.sort(key=lambda x: x.timestamp)
         resolved = self.outcomes.build(events)
-        tx_times = [
-            self.normalizer._timestamp(tx)
-            for tx in txs
-            if isinstance(tx, dict)
-        ]
+        tx_times = []
+        for tx in txs:
+            if not isinstance(tx, dict):
+                continue
+            raw = tx.get("timestamp") or tx.get("blockTime")
+            ts = None
+            if isinstance(raw, (int, float)):
+                ts = datetime.fromtimestamp(float(raw), tz=timezone.utc)
+            elif isinstance(raw, str):
+                try:
+                    ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    ts = None
+            if ts is not None:
+                tx_times.append(ts)
         oldest = min(tx_times) if tx_times else None
+        capacity = max(1, int(limit)) * max(1, int(max_pages))
+        history_exhausted = (
+            (before is not None and len(txs) == 0)
+            or len(txs) < capacity
+        )
         return WalletResearchBundle(
             wallet=wallet,
             transactions=txs,
@@ -132,6 +151,7 @@ class WalletResearchBackfillService:
             oldest_transaction_at=oldest,
             start_before_signature=before,
             oldest_signature=(str(txs[-1].get("signature")) if txs and txs[-1].get("signature") else None),
+            history_exhausted=history_exhausted,
         )
 
     def apply_bundle(
@@ -177,9 +197,12 @@ class WalletResearchBackfillService:
         target = bundle.requested_stop_before
         oldest = bundle.oldest_transaction_at
         target_reached = bool(
-            target is not None
-            and oldest is not None
-            and oldest <= (target if target.tzinfo else target.replace(tzinfo=timezone.utc))
+            bundle.history_exhausted
+            or (
+                target is not None
+                and oldest is not None
+                and oldest <= (target if target.tzinfo else target.replace(tzinfo=timezone.utc))
+            )
         )
         return BackfillResult(
             wallet=bundle.wallet,
@@ -191,6 +214,7 @@ class WalletResearchBackfillService:
             oldest_transaction_at=oldest,
             requested_stop_before=target,
             history_target_reached=target_reached,
+            history_exhausted=bool(bundle.history_exhausted),
             next_before_signature=(None if target_reached else bundle.oldest_signature),
         )
 
