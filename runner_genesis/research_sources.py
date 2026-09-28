@@ -216,9 +216,12 @@ class WalletResearchBackfillService:
                 if resolved_outcomes else 0
             )
 
-            if smart is not None and replay_events:
+            if smart is not None and replay_events and bundle.events:
+                touched_mints = {event.token_mint for event in bundle.events}
                 latest_by_mint: dict[str, datetime] = {}
                 for event in replay_events:
+                    if event.token_mint not in touched_mints:
+                        continue
                     current = latest_by_mint.get(event.token_mint)
                     if current is None or event.timestamp > current:
                         latest_by_mint[event.token_mint] = event.timestamp
