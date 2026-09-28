@@ -206,18 +206,16 @@ class WalletResearchBackfillService:
                 if replay_events:
                     resolved_outcomes = self.outcomes.build(replay_events)
 
-        if smart is not None and hasattr(smart, "observe_historical_batch") and replay_events:
-            smart.observe_historical_batch(replay_events)
+        snapshots: list[tuple[str, datetime, dict[str, Any]]] = []
+        with (state_lock if state_lock is not None else nullcontext()):
+            if smart is not None and hasattr(smart, "observe_historical_batch") and replay_events:
+                smart.observe_historical_batch(replay_events)
 
-        added = (
-            store.backfill_wallet_observations(bundle.wallet, resolved_outcomes)
-            if resolved_outcomes else 0
-        )
-        if self.repository:
-            for link in bundle.funding_links:
-                self.repository.record_funding_relationship(link)
-            for obs in resolved_outcomes:
-                self.repository.record_wallet_outcome(bundle.wallet, obs)
+            added = (
+                store.backfill_wallet_observations(bundle.wallet, resolved_outcomes)
+                if resolved_outcomes else 0
+            )
+
             if smart is not None and replay_events:
                 latest_by_mint: dict[str, datetime] = {}
                 for event in replay_events:
@@ -227,7 +225,17 @@ class WalletResearchBackfillService:
                 for mint, observed_at in latest_by_mint.items():
                     snapshot = smart.position_snapshot(bundle.wallet, mint, observed_at)
                     if snapshot:
-                        self.repository.record_wallet_position(bundle.wallet, mint, observed_at, snapshot)
+                        snapshots.append((mint, observed_at, snapshot))
+
+        if self.repository:
+            for link in bundle.funding_links:
+                self.repository.record_funding_relationship(link)
+            for obs in resolved_outcomes:
+                self.repository.record_wallet_outcome(bundle.wallet, obs)
+            for mint, observed_at, snapshot in snapshots:
+                self.repository.record_wallet_position(
+                    bundle.wallet, mint, observed_at, snapshot
+                )
 
         target = bundle.requested_stop_before
         oldest = bundle.oldest_transaction_at
