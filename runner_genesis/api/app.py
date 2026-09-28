@@ -7,6 +7,8 @@ from ..config import load_settings
 from ..orchestrator import RunnerGenesisOmega
 from ..domain.events import MarketEvent
 from ..ingestion.helius import HeliusWebhookNormalizer
+from ..ingestion.enrich import DexScreenerEnricher
+from ..paper_profile import build_paper_profile
 from ..ingestion.helius_history import HeliusWalletHistoryClient
 from ..research_sources import WalletResearchBackfillService
 from ..research_sync import ResearchSyncCoordinator
@@ -21,6 +23,7 @@ app.add_middleware(
     allow_headers=['*'],
 )
 normalizer = HeliusWebhookNormalizer()
+market_enricher = DexScreenerEnricher(ttl_seconds=15.0, sol_ttl_seconds=15.0)
 research_sync = ResearchSyncCoordinator(settings, engine)
 _research_stop = asyncio.Event()
 _research_task: asyncio.Task | None = None
@@ -44,6 +47,7 @@ async def _stop_research_sync():
         except (asyncio.TimeoutError, asyncio.CancelledError):
             _research_task.cancel()
         _research_task = None
+    await market_enricher.aclose()
 
 
 @app.get('/health')
@@ -52,6 +56,8 @@ def health():
         'ok': True,
         'version': '0.2.0',
         'mode': settings.mode,
+        'network': settings.network,
+        'paper_starting_capital_eur': settings.paper_starting_capital_eur,
         'live_trading': settings.live_trading,
         'paper_only': settings.paper_only,
         'genesis_model_status': engine.genesis.model_status,
@@ -65,7 +71,8 @@ def health():
 
 
 @app.post('/api/event')
-def ingest_event(event: MarketEvent):
+async def ingest_event(event: MarketEvent):
+    event = await market_enricher.enrich(event)
     result = engine.process(event)
     return {
         'snapshot': result.snapshot.model_dump(mode='json'),
@@ -76,7 +83,7 @@ def ingest_event(event: MarketEvent):
 
 
 @app.post('/api/helius/webhook')
-def helius_webhook(payload: dict, x_runner_secret: str | None = Header(default=None)):
+async def helius_webhook(payload: dict, x_runner_secret: str | None = Header(default=None)):
     import os
     expected = os.getenv('HELIUS_WEBHOOK_SECRET')
     if expected and x_runner_secret != expected:
@@ -85,6 +92,7 @@ def helius_webhook(payload: dict, x_runner_secret: str | None = Header(default=N
     items = payload if isinstance(payload, list) else [payload]
     for item in items:
         for event in normalizer.normalize(item):
+            event = await market_enricher.enrich(event)
             r = engine.process(event)
             results.append(r.snapshot.model_dump(mode='json'))
     return {'processed': len(results), 'decisions': results}
@@ -100,6 +108,11 @@ def tokens():
         features = d.features if d else {}
         rows.append({
             'token': mint,
+            'chain': 'solana',
+            'name': t.metadata.get('token_name'),
+            'symbol': t.metadata.get('token_symbol'),
+            'image_url': t.metadata.get('token_image_url'),
+            'dex_url': t.metadata.get('dexscreener_url'),
             'age': ((t.last_event_at - t.created_at).total_seconds() if t.created_at and t.last_event_at else None),
             'mc': t.market_cap_usd,
             'liquidity': t.liquidity_usd,
@@ -155,6 +168,11 @@ def token_detail(mint: str):
         'transitions': transitions,
         'fomo': engine.fomo.recent(mint),
     }
+
+
+@app.get('/api/paper/profile')
+def paper_profile():
+    return build_paper_profile(engine, timezone_name=settings.paper_timezone)
 
 
 @app.get('/api/account')
