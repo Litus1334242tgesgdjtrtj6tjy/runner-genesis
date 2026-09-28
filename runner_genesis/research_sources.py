@@ -175,9 +175,6 @@ class WalletResearchBackfillService:
             for link in bundle.funding_links:
                 actor.observe_funding_link(link.wallet, link.funder, link.timestamp, link.confidence)
 
-        if smart is not None and hasattr(smart, "observe_historical_batch"):
-            smart.observe_historical_batch(bundle.events)
-
         replay_events = list(bundle.events)
         resolved_outcomes = list(bundle.outcomes)
         if self.repository:
