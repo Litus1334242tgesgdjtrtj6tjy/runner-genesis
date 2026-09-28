@@ -171,8 +171,8 @@ function App(){
 
    <section className="metrics-grid">
     <Metric label="Hoy" value={<Pnl value={s.day_pnl_eur}/>} sub="PnL del día"/>
-    <Metric label="7 días" value={<Pnl value={s.week_pnl_eur}/>} sub="Semana actual"/>
-    <Metric label="30 días" value={<Pnl value={s.month_pnl_eur}/>} sub="Mes actual"/>
+    <Metric label="Semana" value={<Pnl value={s.week_pnl_eur}/>} sub="Semana actual"/>
+    <Metric label="Mes" value={<Pnl value={s.month_pnl_eur}/>} sub="Mes actual"/>
     <Metric label="Win rate" value={pct(s.win_rate)} sub={`${s.wins||0} W · ${s.losses||0} L`}/>
     <Metric label="Cerradas" value={num(s.closed_positions,0)} sub="Ciclos completos"/>
     <Metric label="Fees" value={eur(s.fees_eur)} sub="Entrada + salida"/>
