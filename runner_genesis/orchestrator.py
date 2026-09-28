@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
 from datetime import datetime, timedelta, timezone
+import threading
 import numpy as np
 
 from .config import Settings
@@ -63,6 +64,7 @@ class PendingPaperOrder:
 class RunnerGenesisOmega:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.state_lock = threading.RLock()
         self.store = MarketStateStore()
         self.candidate_gate = CandidateUniverseGate()
         self.capital = CapitalSurpriseEngine()
@@ -427,6 +429,10 @@ class RunnerGenesisOmega:
         self._persisted_transition_count = len(self.smart.transitions)
 
     def process(self, e: MarketEvent) -> ProcessResult:
+        with self.state_lock:
+            return self._process_state_locked(e)
+
+    def _process_state_locked(self, e: MarketEvent) -> ProcessResult:
         if e.event_id and e.event_id in self._processed_event_ids:
             return self._duplicate_result(e)
 
