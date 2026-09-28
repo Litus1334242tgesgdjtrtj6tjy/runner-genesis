@@ -491,6 +491,16 @@ class RunnerGenesisOmega:
         fusion = self.fusion.compute(f, probs)
         f.update(fusion)
 
+        fee_quote = self.execution.pump_fees.quote(token)
+        f['estimated_protocol_fee_bps'] = (
+            float(fee_quote.protocol_fee_bps)
+            if fee_quote.protocol_fee_bps is not None
+            else float(self.settings.execution.base_fee_bps)
+        )
+        f['estimated_fee_source'] = fee_quote.source
+        f['estimated_fee_schedule_version'] = fee_quote.schedule_version
+        f['estimated_network_fee_eur'] = self.execution.estimate_network_fee_eur(token)
+
         alpha = self.exec_alpha.compute(probs, f, self.settings.trader.default_position_eur, self.settings.execution)
         f.update(alpha)
 
