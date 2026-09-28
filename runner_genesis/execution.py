@@ -30,6 +30,8 @@ class PaperFill:
     network_fee_eur: float = 0.0
     risk_cluster_id: str | None = None
     risk_cluster_fraction: float = 0.0
+    proposal_action: str | None = None
+    proposal_reduce_fraction: float = 0.0
 
 class PaperExecutionEngine:
     def __init__(self,cfg,seed:int=20260924):
@@ -80,6 +82,7 @@ class PaperExecutionEngine:
                 p.token_mint,side,requested,0,0,price,price,0,network_fee,latency,
                 True,False,now+timedelta(milliseconds=latency),'SIMULATED_TX_FAILURE',
                 None,'NETWORK_ONLY_FAILED_TX',None,0.8 if network_fee>0 else 0.0,network_fee,
+                None,0.0,p.action.value,reduce_fraction,
             )
         max_fill=max(0.0,liq*self.cfg.max_liquidity_fraction)
         reference_filled=min(requested,max_fill) if self.cfg.partial_fill_enabled else requested
@@ -107,4 +110,5 @@ class PaperExecutionEngine:
             False,partial,now+timedelta(milliseconds=latency),'',
             protocol_fee_bps,fee_quote.source,fee_quote.schedule_version,fee_quote.confidence,
             network_fee,
+            None,0.0,p.action.value,reduce_fraction,
         )
