@@ -33,17 +33,19 @@ class RiskGovernor:
             r.append('KILL_SWITCH')
 
         if p.action in (Action.ENTER, Action.ADD):
+            estimated_fee=max(0.0,float(f.get('estimated_entry_fee_eur',0.0) or 0.0))
+            entry_cash_cost=max(0.0,float(p.amount_eur))+estimated_fee
             max_from_pct = max(0.0, account.equity_eur * self.cfg.max_account_pct_per_trade)
             cap = min(self.cfg.max_position_eur, max_from_pct)
             current = account.positions.get(p.token_mint)
             current_cost = current.cost_basis_eur if current else 0.0
-            if current_cost + p.amount_eur > cap + 1e-9:
+            if current_cost + entry_cash_cost > cap + 1e-9:
                 r.append('MAX_POSITION')
-            if p.amount_eur > account.cash_eur:
+            if entry_cash_cost > account.cash_eur + 1e-9:
                 r.append('INSUFFICIENT_CASH')
             if p.token_mint not in account.positions and len(account.positions) >= self.cfg.max_simultaneous_positions:
                 r.append('MAX_SIMULTANEOUS_POSITIONS')
-            if account.daily_spend_eur + p.amount_eur > self.cfg.max_daily_spend_eur:
+            if account.daily_spend_eur + entry_cash_cost > self.cfg.max_daily_spend_eur + 1e-9:
                 r.append('MAX_DAILY_SPEND')
             if token.liquidity_usd is None:
                 r.append('LIQUIDITY_UNKNOWN')
@@ -91,7 +93,7 @@ class RiskGovernor:
                     0.0,
                     float(account.equity_eur) * float(self.cfg.max_correlated_exposure_pct),
                 )
-                if cluster_exposure + float(p.amount_eur) > cluster_limit + 1e-9:
+                if cluster_exposure + entry_cash_cost > cluster_limit + 1e-9:
                     r.append('MAX_WALLET_CLUSTER_EXPOSURE')
 
         if estimated_slippage_pct > self.cfg.max_slippage_pct:
