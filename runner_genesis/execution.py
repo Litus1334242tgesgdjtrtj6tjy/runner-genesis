@@ -63,6 +63,17 @@ class PaperExecutionEngine:
         )
         return float(lamports)*1e-9*sol_usd
 
+    def estimate_entry_fee_eur(self, amount_eur: float, token: TokenState) -> float:
+        amount=max(0.0,float(amount_eur))
+        fee_quote=self.pump_fees.quote(token)
+        protocol_bps=(
+            float(fee_quote.protocol_fee_bps)
+            if fee_quote.protocol_fee_bps is not None
+            else float(self.cfg.base_fee_bps)
+        )
+        notional_rate=(protocol_bps+float(self.cfg.priority_fee_bps))/10000.0
+        return amount*notional_rate+self.estimate_network_fee_eur(token)
+
     def execute(self,p:TradeProposal,token:TokenState,now:datetime,position_quantity:float=0.0)->PaperFill|None:
         if p.action not in (Action.ENTER,Action.ADD,Action.PROTECT,Action.PARTIAL_EXIT,Action.REDUCE,Action.EXIT,Action.KEEP_RUNNER_BAG): return None
         price=float(token.price_usd or 0.0); liq=float(token.liquidity_usd or 0.0)
