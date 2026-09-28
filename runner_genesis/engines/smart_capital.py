@@ -679,6 +679,11 @@ class SmartCapitalEngine:
         wallets = [p.wallet_address for p in active]
         cohort = actor.cohort_features(wallets)
         eff = float(cohort["effective_wallet_count"])
+        token = store.token(mint)
+        try:
+            sol_usd = float(token.metadata.get("sol_usd")) if token.metadata.get("sol_usd") is not None else None
+        except (TypeError, ValueError):
+            sol_usd = None
 
         contributions = []
         capitals = []
@@ -706,7 +711,12 @@ class SmartCapitalEngine:
             independence = actor.independence_factor(p.wallet_address, wallets)
             contribution = q.quality * strategy * max(conviction, 0.15) * freshness * independence
             contributions.append(contribution)
-            capital = max(p.current_exposure_usd, 1.0)
+            capital_usd = float(p.current_exposure_usd)
+            if capital_usd <= 0 and p.current_exposure_sol > 0 and sol_usd and sol_usd > 0:
+                capital_usd = p.current_exposure_sol * sol_usd
+            # Weighting must not silently treat 1 SOL as 1 USD. If quote conversion is
+            # unavailable, fall back to equal actor weight rather than invented capital.
+            capital = capital_usd if capital_usd > 0 else 1.0
             capitals.append(capital)
             qualities.append(q.quality)
             strategies.append(strategy)
@@ -733,7 +743,6 @@ class SmartCapitalEngine:
         avg_hold = sum(holds) / max(len(holds), 1)
         smart_entry_price = price_num / price_den if price_den else None
         smart_entry_mc = mc_num / mc_den if mc_den else None
-        token = store.token(mint)
         entry_distance_price = (token.price_usd / smart_entry_price - 1.0) if token.price_usd and smart_entry_price else None
         entry_distance_mc = (token.market_cap_usd / smart_entry_mc - 1.0) if token.market_cap_usd and smart_entry_mc else None
 
@@ -793,7 +802,20 @@ class SmartCapitalEngine:
         return {
             "qualified_wallet_count": float(raw),
             **cohort,
-            "total_smart_capital_usd": float(sum(p.current_exposure_usd for p in active)),
+            "total_smart_capital_usd": (
+                float(sum(
+                    p.current_exposure_usd
+                    if p.current_exposure_usd > 0
+                    else (p.current_exposure_sol * sol_usd if sol_usd and sol_usd > 0 else 0.0)
+                    for p in active
+                ))
+                if active and any(
+                    p.current_exposure_usd > 0 or (p.current_exposure_sol > 0 and sol_usd and sol_usd > 0)
+                    for p in active
+                )
+                else None
+            ),
+            "total_smart_capital_sol": float(sum(p.current_exposure_sol for p in active)),
             "weighted_smart_capital_consensus": consensus,
             "smart_money_consensus": consensus,
             "accumulation_score": accumulation,
