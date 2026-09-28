@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.3.0 — 2026-09-28
+
+### PAPER account experience
+- Rebuilt the default dashboard as a Pump/FOMO-style personal PAPER profile.
+- Fixed starting balance at €300 by default and surfaced cash, equity, position value, total PnL, realized PnL and unrealized PnL.
+- Added daily, weekly and monthly PnL from persisted equity baselines.
+- Added a persistent equity curve, open-position cards, pending orders, fully closed trade cycles and execution activity.
+- Added win/loss count, win rate, aggregate fees, entry/exit prices and hold duration.
+- Preserved the quantitative candidate engine in separate Radar/System tabs.
+
+### Solana-only / token identity
+- Added explicit Solana-only validation at both Settings and MarketEvent boundaries.
+- Added exact-mint token name/symbol/image enrichment for live PAPER feeds.
+- Persisted token identity metadata so closed/open positions retain token presentation across restarts.
+- Added deterministic UI avatar fallback when upstream metadata has no image.
+
+### Correctness / persistence
+- Added throttled PAPER equity snapshots plus baseline lookup for period PnL.
+- Added profile analytics that reconstruct completed BUY→SELL cycles with entry and exit fees.
+- Kept BACKTEST isolated from PAPER persistence and external identity lookups.
+
+### Verification
+- 156 Python tests passed.
+- Demo backtest smoke passed.
+- Component ablation smoke passed.
+- Frontend production build passed.
+
+
 ## v0.2.0-development — 2026-09-27
 
 ### Data correctness / state
