@@ -500,6 +500,10 @@ class RunnerGenesisOmega:
         f['estimated_fee_source'] = fee_quote.source
         f['estimated_fee_schedule_version'] = fee_quote.schedule_version
         f['estimated_network_fee_eur'] = self.execution.estimate_network_fee_eur(token)
+        f['estimated_default_entry_fee_eur'] = self.execution.estimate_entry_fee_eur(
+            self.settings.trader.default_position_eur,
+            token,
+        )
 
         alpha = self.exec_alpha.compute(probs, f, self.settings.trader.default_position_eur, self.settings.execution)
         f.update(alpha)
