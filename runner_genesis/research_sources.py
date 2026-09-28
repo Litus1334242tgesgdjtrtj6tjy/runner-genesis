@@ -42,6 +42,9 @@ class BackfillResult:
     funding_links: int
     resolved_outcomes: int
     added_outcomes: int
+    oldest_transaction_at: datetime | None = None
+    requested_stop_before: datetime | None = None
+    history_target_reached: bool = False
 
 
 @dataclass
@@ -51,6 +54,8 @@ class WalletResearchBundle:
     events: list[Any]
     funding_links: list[Any]
     outcomes: list[Any]
+    requested_stop_before: datetime | None = None
+    oldest_transaction_at: datetime | None = None
 
 
 class WalletResearchBackfillService:
@@ -74,8 +79,20 @@ class WalletResearchBackfillService:
         self.normalizer = EnhancedWalletHistoryNormalizer()
         self.outcomes = WalletOutcomeBuilder()
 
-    async def fetch_wallet_bundle(self, wallet: str, *, limit: int = 100, max_pages: int = 5) -> WalletResearchBundle:
-        txs = await self.client.fetch_transactions(wallet, limit=limit, max_pages=max_pages)
+    async def fetch_wallet_bundle(
+        self,
+        wallet: str,
+        *,
+        limit: int = 100,
+        max_pages: int = 5,
+        stop_before_time: datetime | None = None,
+    ) -> WalletResearchBundle:
+        txs = await self.client.fetch_transactions(
+            wallet,
+            limit=limit,
+            max_pages=max_pages,
+            stop_before_time=stop_before_time,
+        )
         events = []
         funding = []
         for tx in txs:
@@ -84,12 +101,20 @@ class WalletResearchBackfillService:
         events.sort(key=lambda x: x.timestamp)
         funding.sort(key=lambda x: x.timestamp)
         resolved = self.outcomes.build(events)
+        tx_times = [
+            self.normalizer._timestamp(tx)
+            for tx in txs
+            if isinstance(tx, dict)
+        ]
+        oldest = min(tx_times) if tx_times else None
         return WalletResearchBundle(
             wallet=wallet,
             transactions=txs,
             events=events,
             funding_links=funding,
             outcomes=resolved,
+            requested_stop_before=stop_before_time,
+            oldest_transaction_at=oldest,
         )
 
     def apply_bundle(
@@ -132,6 +157,13 @@ class WalletResearchBackfillService:
                     if snapshot:
                         self.repository.record_wallet_position(bundle.wallet, mint, observed_at, snapshot)
 
+        target = bundle.requested_stop_before
+        oldest = bundle.oldest_transaction_at
+        target_reached = bool(
+            target is not None
+            and oldest is not None
+            and oldest <= (target if target.tzinfo else target.replace(tzinfo=timezone.utc))
+        )
         return BackfillResult(
             wallet=bundle.wallet,
             transactions=len(bundle.transactions),
@@ -139,10 +171,28 @@ class WalletResearchBackfillService:
             funding_links=len(bundle.funding_links),
             resolved_outcomes=len(bundle.outcomes),
             added_outcomes=added,
+            oldest_transaction_at=oldest,
+            requested_stop_before=target,
+            history_target_reached=target_reached,
         )
 
-    async def backfill_wallet(self, wallet: str, store, actor, *, smart=None, limit: int = 100, max_pages: int = 5) -> BackfillResult:
-        bundle = await self.fetch_wallet_bundle(wallet, limit=limit, max_pages=max_pages)
+    async def backfill_wallet(
+        self,
+        wallet: str,
+        store,
+        actor,
+        *,
+        smart=None,
+        limit: int = 100,
+        max_pages: int = 5,
+        stop_before_time: datetime | None = None,
+    ) -> BackfillResult:
+        bundle = await self.fetch_wallet_bundle(
+            wallet,
+            limit=limit,
+            max_pages=max_pages,
+            stop_before_time=stop_before_time,
+        )
         return self.apply_bundle(bundle, store, actor, smart=smart)
 
 
