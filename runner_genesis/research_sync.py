@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .ingestion.helius_history import HeliusWalletHistoryClient
@@ -22,6 +22,8 @@ class ResearchSyncCoordinator:
         self.engine = engine
         self._seen_wallets: set[str] = set()
         self._last_backfill: dict[str, datetime] = {}
+        self._history_cursor: dict[str, str] = {}
+        self._history_target_reached: set[str] = set()
         self._last_sync: datetime | None = None
         self._last_result: dict[str, Any] = {"status": "NOT_RUN"}
         self.wallet_priority = WalletDiscoveryPriorityEngine(settings.external_discovery)
@@ -47,6 +49,14 @@ class ResearchSyncCoordinator:
             if wallet and isinstance(ts, datetime):
                 self._last_backfill[wallet] = self._aware(ts)
                 self._seen_wallets.add(wallet)
+                payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                if bool(payload.get("history_target_reached", False)):
+                    self._history_target_reached.add(wallet)
+                    self._history_cursor.pop(wallet, None)
+                else:
+                    cursor = str(payload.get("next_before_signature") or "").strip()
+                    if cursor:
+                        self._history_cursor[wallet] = cursor
 
     @property
     def enabled(self) -> bool:
@@ -458,13 +468,24 @@ class ResearchSyncCoordinator:
 
             semaphore = asyncio.Semaphore(max(1, int(self.settings.helius_history.max_concurrency)))
 
+            history_cutoff = now - timedelta(days=max(1, int(self.settings.helius_history.lookback_days)))
+
             async def fetch_one(wallet: str):
                 async with semaphore:
                     try:
+                        history_complete = wallet in self._history_target_reached
+                        cursor = None if history_complete else self._history_cursor.get(wallet)
+                        pages = (
+                            int(self.settings.helius_history.max_pages)
+                            if history_complete
+                            else int(self.settings.helius_history.bootstrap_max_pages)
+                        )
                         bundle = await service.fetch_wallet_bundle(
                             wallet,
                             limit=self.settings.helius_history.page_limit,
-                            max_pages=self.settings.helius_history.max_pages,
+                            max_pages=max(1, pages),
+                            stop_before_time=history_cutoff,
+                            before=cursor,
                         )
                         return wallet, bundle, None
                     except Exception as exc:
@@ -512,6 +533,14 @@ class ResearchSyncCoordinator:
                     backfills.append(result_payload)
                     self._seen_wallets.add(wallet)
                     self._last_backfill[wallet] = now
+                    if result.history_target_reached:
+                        self._history_target_reached.add(wallet)
+                        self._history_cursor.pop(wallet, None)
+                    else:
+                        self._history_target_reached.discard(wallet)
+                        cursor = str(result.next_before_signature or "").strip()
+                        if cursor:
+                            self._history_cursor[wallet] = cursor
                     repository = getattr(self.engine, "repository", None)
                     if repository is not None and hasattr(repository, "record_wallet_backfill_status"):
                         repository.record_wallet_backfill_status(wallet, now, result_payload)
@@ -543,6 +572,8 @@ class ResearchSyncCoordinator:
             "external_discovery_error": provider_error,
             "wallet_backfills": backfills,
             "wallet_backfills_skipped_recent": skipped_recent,
+            "wallet_history_complete": len(self._history_target_reached),
+            "wallet_history_incomplete": len(self._history_cursor),
         }
         return self._last_result
 
