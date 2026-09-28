@@ -4,17 +4,34 @@ from __future__ import annotations
 class ExecutableAlphaModel:
     def compute(self, probs: dict, f: dict, position_eur: float, execution_cfg) -> dict[str, float | str]:
         liq = max(float(f.get('liquidity_usd') or 0.0), 1.0)
-        impact = min(1.0, execution_cfg.impact_coefficient * (position_eur / liq))
-        costs = (
-            execution_cfg.base_fee_bps
-            + execution_cfg.priority_fee_bps
-            + execution_cfg.mev_adverse_bps
-            + execution_cfg.base_slippage_bps
-        ) / 10000.0 + impact
-        max_size = liq * execution_cfg.max_liquidity_fraction
+        impact_one_way = min(1.0, float(execution_cfg.impact_coefficient) * (float(position_eur) / liq))
+
+        protocol_fee_bps = f.get('estimated_protocol_fee_bps')
+        if protocol_fee_bps is None:
+            protocol_fee_bps = float(execution_cfg.base_fee_bps)
+        protocol_fee_bps = max(0.0, float(protocol_fee_bps))
+
+        configured_notional_overhead_bps = max(0.0, float(execution_cfg.priority_fee_bps))
+        adverse_bps = max(0.0, float(execution_cfg.mev_adverse_bps))
+        base_slippage_bps = max(0.0, float(execution_cfg.base_slippage_bps))
+        network_fee_eur = max(0.0, float(f.get('estimated_network_fee_eur') or 0.0))
+
+        # Entry policy should compare expected return against the full round trip, not
+        # one-way friction. This mirrors PAPER execution more closely and avoids promoting
+        # tiny apparent edges that disappear after exit costs.
+        one_way_notional_cost = (
+            protocol_fee_bps
+            + configured_notional_overhead_bps
+            + adverse_bps
+            + base_slippage_bps
+        ) / 10000.0 + impact_one_way
+        network_roundtrip_pct = (2.0 * network_fee_eur) / max(float(position_eur), 1e-9)
+        roundtrip_costs = min(2.0, 2.0 * one_way_notional_cost + network_roundtrip_pct)
+
+        max_size = liq * float(execution_cfg.max_liquidity_fraction)
         sellability = float(f.get('sellability_score') or 0.0)
         if sellability <= 0.0:
-            sellability = max(0.0, min(1.0, liq / 100_000.0)) * (1 - min(1.0, impact * 4))
+            sellability = max(0.0, min(1.0, liq / 100_000.0)) * (1 - min(1.0, impact_one_way * 4))
 
         p2 = probs.get('p_x2_60m')
         p5 = probs.get('p_x5_60m')
@@ -25,10 +42,6 @@ class ExecutableAlphaModel:
             gross = (p2f * 0.55 + p5f * 1.2 + p10f * 2.0) - (1 - max(p2f, p5f, p10f)) * 0.28
             status = 'MODEL_BASED'
         else:
-            # Research-only proxy used for PAPER ranking/experimentation. It is not a
-            # calibrated return forecast. Prefer the reliability-aware fusion score when
-            # available so Smart Capital / World / MiroFish / FlyWire context is not
-            # double-counted independently here.
             genesis = float(probs.get('genesis_score') or 0.0)
             fusion = float(f.get('fusion_research_score', genesis) or 0.0)
             fusion_conf = float(f.get('fusion_confidence', 0.0) or 0.0)
@@ -46,13 +59,17 @@ class ExecutableAlphaModel:
                 - 0.08
             )
             status = 'FUSION_HEURISTIC_UNTRAINED' if 'fusion_research_score' in f else 'HEURISTIC_UNTRAINED'
-        edge = gross - costs
+
+        edge = gross - roundtrip_costs
         return {
             'executable_alpha_status': status,
-            'expected_executable_return': gross - costs,
+            'expected_executable_return': edge,
             'expected_executable_edge': edge,
             'max_executable_size_eur': max_size,
             'liquidity_confidence': max(0.0, min(1.0, liq / 50_000.0)),
             'sellability_score': sellability,
-            'estimated_roundtrip_cost_pct': costs,
+            'estimated_protocol_fee_bps': protocol_fee_bps,
+            'estimated_network_fee_eur': network_fee_eur,
+            'estimated_one_way_cost_pct': one_way_notional_cost + network_fee_eur / max(float(position_eur), 1e-9),
+            'estimated_roundtrip_cost_pct': roundtrip_costs,
         }
