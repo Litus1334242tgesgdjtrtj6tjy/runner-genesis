@@ -120,6 +120,18 @@ def _closed_trade_results(fills) -> list[tuple[float, float]]:
 
 class Backtester:
     def __init__(self, engine: RunnerGenesisOmega):
+        # A backtest must never inherit live PAPER/SHADOW runtime state.
+        # Persistent checkpoints, event IDs, positions and a non-deterministic
+        # MiroFish instance can otherwise contaminate replay results.
+        settings = engine.settings
+        if settings.mode.upper() != "BACKTEST" or engine.repository is not None:
+            settings = settings.model_copy(deep=True)
+            settings.mode = "BACKTEST"
+            settings.live_trading = False
+            settings.features.setdefault("database_persistence", {})["enabled"] = False
+            settings.external_discovery.auto_refresh = False
+            settings.external_discovery.fomoscan_enabled = False
+            engine = RunnerGenesisOmega(settings)
         self.engine = engine
 
     def run(self, path: str, variant: str = "FULL") -> BacktestMetrics:
