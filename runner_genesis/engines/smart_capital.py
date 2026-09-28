@@ -98,6 +98,7 @@ class SmartCapitalEngine:
         self.wallet_quality = wallet_quality
         self.discovery = discovery
         self.positions: dict[tuple[str, str], WalletTokenPosition] = {}
+        self.wallet_event_history: dict[str, dict[str, MarketEvent]] = defaultdict(dict)
         self.wallet_trade_times: dict[str, list[datetime]] = defaultdict(list)
         self.wallet_closed_holds: dict[str, list[float]] = defaultdict(list)
         self.token_state: dict[str, str] = defaultdict(lambda: "OBSERVATION")
@@ -162,16 +163,30 @@ class SmartCapitalEngine:
         if state:
             self.token_state[mint] = str(state)
 
-    def observe(self, e: MarketEvent) -> None:
-        if not self.cfg.enabled or not e.wallet or e.event_type not in BUY_TYPES | SELL_TYPES:
+    @staticmethod
+    def _event_key(e: MarketEvent) -> str:
+        if e.event_id:
+            return str(e.event_id)
+        return "|".join([
+            str(e.tx_signature or ""),
+            e.timestamp.isoformat(),
+            str(e.token_mint),
+            str(e.wallet or ""),
+            e.event_type.value,
+            str(e.amount_token or 0.0),
+            str(e.usd_value or 0.0),
+            str(e.sol_value or 0.0),
+        ])
+
+    def _apply_event(self, e: MarketEvent) -> None:
+        if not e.wallet or e.event_type not in BUY_TYPES | SELL_TYPES:
             return
 
         key = (e.wallet, e.token_mint)
         if e.event_type in SELL_TYPES:
-            # A sell with no previously observed/hydrated position is not evidence of a
-            # reduction in the tracked cycle. This matters for truncated history windows.
+            # A sell with no preceding tracked buy is not evidence about the tracked cycle.
             p = self.positions.get(key)
-            if p is None or (p.bought_token <= 0 and p.bought_usd <= 0):
+            if p is None or (p.bought_token <= 0 and p.bought_usd <= 0 and p.invested_sol <= 0):
                 return
         else:
             p = self._position(e.wallet, e.token_mint)
@@ -207,12 +222,16 @@ class SmartCapitalEngine:
                 p.buy_sizes_usd.append(usd)
             if e.price_usd is not None and e.price_usd > 0:
                 if old_bought_usd > 0 and p.average_entry_price is not None and usd > 0:
-                    p.average_entry_price = (p.average_entry_price * old_bought_usd + float(e.price_usd) * usd) / (old_bought_usd + usd)
+                    p.average_entry_price = (
+                        p.average_entry_price * old_bought_usd + float(e.price_usd) * usd
+                    ) / (old_bought_usd + usd)
                 elif p.average_entry_price is None:
                     p.average_entry_price = float(e.price_usd)
             if e.market_cap_usd is not None and e.market_cap_usd > 0:
                 if old_bought_usd > 0 and p.average_entry_market_cap is not None and usd > 0:
-                    p.average_entry_market_cap = (p.average_entry_market_cap * old_bought_usd + float(e.market_cap_usd) * usd) / (old_bought_usd + usd)
+                    p.average_entry_market_cap = (
+                        p.average_entry_market_cap * old_bought_usd + float(e.market_cap_usd) * usd
+                    ) / (old_bought_usd + usd)
                 elif p.average_entry_market_cap is None:
                     p.average_entry_market_cap = float(e.market_cap_usd)
             p.state = "NEW_POSITION" if p.buy_count == 1 else "ADD"
@@ -231,14 +250,56 @@ class SmartCapitalEngine:
             if p.retained_fraction <= 0.02:
                 p.state = "EXIT"
                 if p.first_entry_time is not None and old_state != "EXIT":
-                    self.wallet_closed_holds[e.wallet].append(max(0.0, (e.timestamp - p.first_entry_time).total_seconds()))
+                    self.wallet_closed_holds[e.wallet].append(
+                        max(0.0, (e.timestamp - p.first_entry_time).total_seconds())
+                    )
             else:
                 p.state = "REDUCE"
 
+    def _rebuild_wallet(self, wallet: str) -> None:
+        for key in [key for key in self.positions if key[0] == wallet]:
+            del self.positions[key]
+        self.wallet_trade_times[wallet] = []
+        self.wallet_closed_holds[wallet] = []
+        events = sorted(
+            self.wallet_event_history.get(wallet, {}).values(),
+            key=lambda x: (x.timestamp, self._event_key(x)),
+        )
+        for event in events:
+            self._apply_event(event)
+
+    def observe(self, e: MarketEvent) -> None:
+        if not self.cfg.enabled or not e.wallet or e.event_type not in BUY_TYPES | SELL_TYPES:
+            return
+        history = self.wallet_event_history[e.wallet]
+        event_key = self._event_key(e)
+        if event_key in history:
+            return
+        latest = max((x.timestamp for x in history.values()), default=None)
+        history[event_key] = e
+        if latest is not None and e.timestamp < latest:
+            self._rebuild_wallet(e.wallet)
+        else:
+            self._apply_event(e)
+
     def observe_historical_batch(self, events: list[MarketEvent]) -> None:
-        """Reconstruct wallet positions from historical events without market-state replay."""
-        for event in sorted(events, key=lambda x: (x.timestamp, x.event_id)):
-            self.observe(event)
+        """Merge out-of-order backfill pages then rebuild each affected wallet chronologically."""
+        affected: set[str] = set()
+        for event in events:
+            if (
+                not self.cfg.enabled
+                or not event.wallet
+                or event.event_type not in BUY_TYPES | SELL_TYPES
+            ):
+                continue
+            key = self._event_key(event)
+            history = self.wallet_event_history[event.wallet]
+            if key in history:
+                continue
+            history[key] = event
+            affected.add(event.wallet)
+        for wallet in sorted(affected):
+            self._rebuild_wallet(wallet)
 
 
     def position_snapshot(self, wallet: str, mint: str, now: datetime) -> dict[str, Any]:
