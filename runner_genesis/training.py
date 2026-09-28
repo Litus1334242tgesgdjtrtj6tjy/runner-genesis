@@ -446,6 +446,40 @@ def _purge_before_boundary(frame: pd.DataFrame, boundary: pd.Timestamp) -> pd.Da
     return frame.loc[frame["label_available_at"] < boundary].copy()
 
 
+def _purge_token_overlap(frame: pd.DataFrame, future_frame: pd.DataFrame) -> pd.DataFrame:
+    """Conservative new-token OOS guard: the same mint cannot straddle model partitions."""
+    if "token_mint" not in frame.columns or "token_mint" not in future_frame.columns:
+        return frame.copy()
+    blocked = set(future_frame["token_mint"].dropna().astype(str))
+    if not blocked:
+        return frame.copy()
+    return frame.loc[~frame["token_mint"].astype(str).isin(blocked)].copy()
+
+
+def _token_balanced_weights(frame: pd.DataFrame) -> np.ndarray:
+    """Give every token roughly equal total training mass despite different event counts."""
+    if len(frame) == 0:
+        return np.asarray([], dtype=float)
+    if "token_mint" not in frame.columns:
+        return np.ones(len(frame), dtype=float)
+    tokens = frame["token_mint"].fillna("__UNKNOWN__").astype(str)
+    counts = tokens.value_counts()
+    weights = tokens.map(lambda x: 1.0 / max(float(counts.get(x, 1)), 1.0)).to_numpy(dtype=float)
+    mean = float(weights.mean()) if len(weights) else 1.0
+    return weights / max(mean, 1e-12)
+
+
+def _earliest_token_metric(frame: pd.DataFrame, target: str, probabilities: np.ndarray) -> dict[str, float | None]:
+    """Measure OOS classification once per token using its earliest scored decision."""
+    if len(frame) == 0 or "token_mint" not in frame.columns:
+        return {}
+    tmp = frame[["token_mint", "decision_time", target]].copy()
+    tmp["_p"] = np.asarray(probabilities, dtype=float)
+    tmp = tmp.sort_values(["decision_time", "token_mint"]).drop_duplicates("token_mint", keep="first")
+    metrics = _safe_metric(tmp[target].astype(int).to_numpy(), tmp["_p"].to_numpy(dtype=float))
+    return {f"token_earliest_{k}": v for k, v in metrics.items()}
+
+
 def _expected_calibration_error(y: np.ndarray, p: np.ndarray, bins: int = 10) -> float:
     y = np.asarray(y, dtype=float)
     p = np.asarray(p, dtype=float)
@@ -510,6 +544,8 @@ def train_genesis_from_dataset(
     model_output: str | Path,
     *,
     min_rows: int = 100,
+    group_purge_tokens: bool = True,
+    token_balance: bool = True,
 ) -> dict[str, Any]:
     path = Path(dataset_path)
     df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
@@ -532,6 +568,14 @@ def train_genesis_from_dataset(
     test = df.iloc[val_end:].copy()
     train = _purge_before_boundary(raw_train, val_start_time)
     val = _purge_before_boundary(raw_val, test_start_time)
+    temporal_train_rows = len(train)
+    temporal_val_rows = len(val)
+    if group_purge_tokens:
+        # A mint seen in validation/test is withheld from earlier fitting partitions.
+        # This is intentionally conservative for a detector whose deployment target is
+        # newly launched tokens rather than later observations of already-known mints.
+        train = _purge_token_overlap(train, pd.concat([val, test], ignore_index=True))
+        val = _purge_token_overlap(val, test)
     if len(train) == 0 or len(val) == 0 or len(test) == 0:
         raise ValueError("purged chronological train/validation/test splits are empty")
 
@@ -557,25 +601,39 @@ def train_genesis_from_dataset(
             ("scale", StandardScaler()),
             ("clf", LogisticRegression(max_iter=2000, class_weight="balanced", random_state=783)),
         ])
-        base.fit(X_train, y_train)
+        train_weights = _token_balanced_weights(train) if token_balance else None
+        if train_weights is None:
+            base.fit(X_train, y_train)
+        else:
+            base.fit(X_train, y_train, clf__sample_weight=train_weights)
         raw_val = np.clip(base.predict_proba(X_val)[:, 1], 1e-6, 1 - 1e-6)
 
         calibrator = None
         if len(np.unique(y_val)) >= 2:
             logits = np.log(raw_val / (1 - raw_val)).reshape(-1, 1)
             calibrator = LogisticRegression(max_iter=1000, random_state=783)
-            calibrator.fit(logits, y_val)
+            val_weights = _token_balanced_weights(val) if token_balance else None
+            if val_weights is None:
+                calibrator.fit(logits, y_val)
+            else:
+                calibrator.fit(logits, y_val, sample_weight=val_weights)
 
         model = PlattCalibratedBinaryModel(base, calibrator)
         p_test = model.predict_proba(X_test)[:, 1]
         models[output_name] = model
         metrics[output_name] = {
             **_safe_metric(y_test, p_test),
+            **_earliest_token_metric(test, target, p_test),
             "train_rows": len(train),
             "validation_rows": len(val),
             "test_rows": len(test),
             "purged_train_rows": len(raw_train) - len(train),
             "purged_validation_rows": len(raw_val) - len(val),
+            "token_overlap_purged_train_rows": temporal_train_rows - len(train),
+            "token_overlap_purged_validation_rows": temporal_val_rows - len(val),
+            "unique_train_tokens": int(train["token_mint"].nunique()) if "token_mint" in train else None,
+            "unique_validation_tokens": int(val["token_mint"].nunique()) if "token_mint" in val else None,
+            "unique_test_tokens": int(test["token_mint"].nunique()) if "token_mint" in test else None,
             "train_positive_rate": float(np.mean(y_train)),
             "validation_positive_rate": float(np.mean(y_val)),
             "test_positive_rate": float(np.mean(y_test)),
@@ -600,6 +658,8 @@ def train_genesis_from_dataset(
             "raw_train_rows": len(raw_train),
             "raw_validation_rows": len(raw_val),
             "label_availability_purge": True,
+            "token_group_purge": bool(group_purge_tokens),
+            "token_balanced_training": bool(token_balance),
             "validation_start": str(val_start_time),
             "test_start": str(test_start_time),
         },
@@ -623,6 +683,8 @@ def walk_forward_evaluate(
     target: str = "y_executable_runner",
     min_train_rows: int = 100,
     folds: int = 4,
+    group_purge_tokens: bool = True,
+    token_balance: bool = True,
 ) -> dict[str, Any]:
     """Expanding chronological walk-forward evaluation with in-window Platt calibration."""
     path = Path(dataset_path)
@@ -651,6 +713,9 @@ def walk_forward_evaluate(
         test_boundary = test.iloc[0]["decision_time"]
         raw_history = df.iloc[:test_start]
         history = _purge_before_boundary(raw_history, test_boundary)
+        temporal_history_rows = len(history)
+        if group_purge_tokens:
+            history = _purge_token_overlap(history, test)
         calibration_rows = max(10, int(len(history) * 0.20))
         fit_end = len(history) - calibration_rows
         if fit_end < 20 or calibration_rows >= len(history):
@@ -665,6 +730,9 @@ def walk_forward_evaluate(
         calibration = history.iloc[fit_end:].copy()
         calibration_boundary = calibration.iloc[0]["decision_time"]
         fit = _purge_before_boundary(raw_fit, calibration_boundary)
+        temporal_fit_rows = len(fit)
+        if group_purge_tokens:
+            fit = _purge_token_overlap(fit, calibration)
         if len(fit) < 20:
             fold_results.append({
                 "fold": fold,
@@ -689,17 +757,26 @@ def walk_forward_evaluate(
             ("scale", StandardScaler()),
             ("clf", LogisticRegression(max_iter=2000, class_weight="balanced", random_state=783 + fold)),
         ])
-        base.fit(X_fit, y_fit)
+        fit_weights = _token_balanced_weights(fit) if token_balance else None
+        if fit_weights is None:
+            base.fit(X_fit, y_fit)
+        else:
+            base.fit(X_fit, y_fit, clf__sample_weight=fit_weights)
 
         calibrator = None
         raw_cal = np.clip(base.predict_proba(X_cal)[:, 1], 1e-6, 1 - 1e-6)
         if len(np.unique(y_cal)) >= 2:
             logits = np.log(raw_cal / (1 - raw_cal)).reshape(-1, 1)
             calibrator = LogisticRegression(max_iter=1000, random_state=1783 + fold)
-            calibrator.fit(logits, y_cal)
+            cal_weights = _token_balanced_weights(calibration) if token_balance else None
+            if cal_weights is None:
+                calibrator.fit(logits, y_cal)
+            else:
+                calibrator.fit(logits, y_cal, sample_weight=cal_weights)
         model = PlattCalibratedBinaryModel(base, calibrator)
         p_test = model.predict_proba(X_test)[:, 1]
         metrics = _safe_metric(y_test, p_test)
+        metrics.update(_earliest_token_metric(test, target, p_test))
         fold_results.append({
             "fold": fold,
             "status": "OK",
@@ -708,6 +785,9 @@ def walk_forward_evaluate(
             "test_rows": len(test),
             "purged_history_rows": len(raw_history) - len(history),
             "purged_fit_rows": len(raw_fit) - len(fit),
+            "token_overlap_purged_history_rows": temporal_history_rows - len(history),
+            "token_overlap_purged_fit_rows": temporal_fit_rows - len(fit),
+            "unique_test_tokens": int(test["token_mint"].nunique()) if "token_mint" in test else None,
             "train_end": str(history.iloc[-1]["decision_time"]),
             "test_start": str(test.iloc[0]["decision_time"]),
             "test_end": str(test.iloc[-1]["decision_time"]),
@@ -730,6 +810,8 @@ def walk_forward_evaluate(
     return {
         "target": target,
         "feature_order": FEATURE_ORDER,
+        "token_group_purge": bool(group_purge_tokens),
+        "token_balanced_training": bool(token_balance),
         "folds": fold_results,
         "aggregate": aggregate,
     }
