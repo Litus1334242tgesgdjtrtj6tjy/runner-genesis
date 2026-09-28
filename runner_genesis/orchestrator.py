@@ -210,10 +210,31 @@ class RunnerGenesisOmega:
                 source=str(row.get('source') or 'PUMP_OFFICIAL'),
             )
 
+        reconstructed_keys: set[tuple[str, str]] = set()
+        if hasattr(self.repository, 'load_wallet_transactions'):
+            historical_events = []
+            for row in self.repository.load_wallet_transactions(limit=max(limit, 500_000)):
+                payload = row.get('payload')
+                if not isinstance(payload, dict):
+                    continue
+                try:
+                    event = MarketEvent.model_validate(payload)
+                except Exception:
+                    continue
+                historical_events.append(event)
+                if event.wallet:
+                    reconstructed_keys.add((str(event.wallet), str(event.token_mint)))
+            if historical_events:
+                self.smart.observe_historical_batch(historical_events)
+                self.actor.observe_historical_batch(historical_events)
+
         for row in self.repository.load_latest_wallet_positions(limit=limit):
+            key = (str(row['wallet_address']), str(row['token_mint']))
+            if key in reconstructed_keys:
+                continue
             self.smart.restore_position_snapshot(
-                str(row['wallet_address']),
-                str(row['token_mint']),
+                key[0],
+                key[1],
                 dict(row.get('payload') or {}),
             )
         for row in self.repository.load_latest_smart_states(limit=limit):
@@ -430,6 +451,8 @@ class RunnerGenesisOmega:
 
         if self.repository:
             self.repository.record_event(e)
+            if hasattr(self.repository, 'record_wallet_transaction'):
+                self.repository.record_wallet_transaction(e)
 
         # Historical wallet features are evaluated BEFORE the current event enters wallet history.
         cs = self.capital.compute(e, self.store)
