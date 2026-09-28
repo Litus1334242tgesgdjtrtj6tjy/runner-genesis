@@ -1,5 +1,6 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+from contextlib import nullcontext
 from collections import deque
 from datetime import datetime, timedelta, timezone
 import threading
@@ -7,7 +8,7 @@ import numpy as np
 
 from .config import Settings
 from .domain.events import MarketEvent, DecisionSnapshot
-from .domain.state import WalletBuyObservation
+from .domain.state import WalletBuyObservation, PaperAccount, PaperPosition
 from .state_store import MarketStateStore, BUY_TYPES
 from .engines.capital_surprise import CapitalSurpriseEngine
 from .engines.wallet_quality import WalletQualityEngine
@@ -63,7 +64,11 @@ class PendingPaperOrder:
 
 class RunnerGenesisOmega:
     def __init__(self, settings: Settings):
+        if settings.live_trading or settings.mode.upper() == 'LIVE':
+            raise ValueError('LIVE_TRADING must remain false')
         self.settings = settings
+        self.failed = False
+        self._watermark: datetime | None = None
         self.state_lock = threading.RLock()
         self.store = MarketStateStore()
         self.candidate_gate = CandidateUniverseGate()
@@ -121,6 +126,43 @@ class RunnerGenesisOmega:
             self._hydrate_research_state()
             self._hydrate_paper_portfolio()
             self._hydrate_pending_paper()
+            self._hydrate_checkpoint()
+
+    def _hydrate_checkpoint(self) -> None:
+        checkpoint = self.repository.load_checkpoint()
+        if checkpoint is None:
+            return
+        data = checkpoint['account']
+        positions = {}
+        for mint, row in data['positions'].items():
+            row = dict(row)
+            for key in ('opened_at', 'last_updated_at'):
+                row[key] = datetime.fromisoformat(row[key])
+            positions[mint] = PaperPosition(**row)
+        account = PaperAccount(data['starting_cash_eur'], data['cash_eur'])
+        for key, value in data.items():
+            if key not in {'positions', 'accounting_day_utc'}:
+                setattr(account, key, value)
+        if data.get('accounting_day_utc'):
+            from datetime import date
+            account.accounting_day_utc = date.fromisoformat(data['accounting_day_utc'])
+        account.positions = positions
+        self.portfolio.account = account
+        self.portfolio.marks = dict(checkpoint.get('marks') or {})
+        self._watermark = datetime.fromisoformat(checkpoint['watermark']) if checkpoint.get('watermark') else None
+        self.pending_orders.clear()
+        for mint, row in checkpoint.get('pending_orders', {}).items():
+            proposal = dict(row['proposal'])
+            proposal['action'] = Action(proposal['action'])
+            self.pending_orders[mint] = PendingPaperOrder(
+                TradeProposal(**proposal), datetime.fromisoformat(row['signal_time']),
+                datetime.fromisoformat(row['due_time']), row['signal_features'],
+            )
+
+    def _checkpoint(self) -> dict:
+        return {'version': 1, 'watermark': self._watermark,
+                'account': asdict(self.portfolio.account), 'marks': self.portfolio.marks,
+                'pending_orders': {mint: asdict(order) for mint, order in self.pending_orders.items()}}
 
     @staticmethod
     def _aware(ts: datetime) -> datetime:
@@ -381,6 +423,12 @@ class RunnerGenesisOmega:
         if pending is None or now < pending.due_time:
             return None, []
 
+        if (now - pending.due_time).total_seconds() > self.settings.execution.pending_expiry_seconds:
+            del self.pending_orders[mint]
+            if self.repository:
+                self.repository.record_paper_update(mint, now, 'PENDING_EXPIRED', {})
+            return None, ['PENDING_EXPIRED']
+
         if str(features.get('entry_validity')) != 'VALID':
             del self.pending_orders[mint]
             if self.repository:
@@ -392,11 +440,14 @@ class RunnerGenesisOmega:
 
         # A delayed entry must use a quote explicitly observed on the current verified
         # event. TokenState may still contain an older cached price/liquidity value.
+        if market_event is None:
+            market_event = token.events[-1] if token.events else None
         if market_event is not None:
             fresh_quote = (
                 market_event.token_mint == mint
                 and bool(market_event.asset_match_verified)
                 and market_event.timestamp >= pending.due_time
+                and market_event.timestamp <= now
                 and market_event.price_usd is not None
                 and float(market_event.price_usd) > 0
                 and market_event.liquidity_usd is not None
@@ -404,6 +455,8 @@ class RunnerGenesisOmega:
             )
             if not fresh_quote:
                 return None, ['WAITING_FRESH_EXECUTION_QUOTE']
+        else:
+            return None, ['WAITING_FRESH_EXECUTION_QUOTE']
 
         execution_features = dict(features)
         if not execution_features.get('dominant_actor_cluster_id'):
@@ -417,7 +470,11 @@ class RunnerGenesisOmega:
         del self.pending_orders[mint]
         fill, approved, reasons = self._execute(pending.proposal, token, now, execution_features)
         if not approved:
+            if self.repository:
+                self.repository.record_paper_update(mint, now, 'PENDING_RISK_REJECTED', {'reasons': reasons})
             return fill, reasons
+        if fill is None and self.repository:
+            self.repository.record_paper_update(mint, now, 'PENDING_NO_FILL', {})
         return fill, []
 
     def _persist_new_transitions(self) -> None:
@@ -430,7 +487,29 @@ class RunnerGenesisOmega:
 
     def process(self, e: MarketEvent) -> ProcessResult:
         with self.state_lock:
-            return self._process_state_locked(e)
+            if self.failed:
+                raise RuntimeError('Engine failed closed after processing/persistence error; restart required')
+            try:
+                with self.repository.transaction() if self.repository else nullcontext():
+                    if self.repository and self.repository.has_event(e.event_id):
+                        return self._duplicate_result(e)
+                    if self._watermark is not None and e.timestamp < self._watermark:
+                        snapshot = DecisionSnapshot(
+                            decision_time=e.timestamp, token_mint=e.token_mint,
+                            data_available_until=e.timestamp, features={'event_status': 'OUT_OF_ORDER'},
+                            probabilities={}, action='IGNORED_OUT_OF_ORDER', reasons=['OUT_OF_ORDER'],
+                        )
+                        return ProcessResult(snapshot, None, False, ['OUT_OF_ORDER'])
+                    result = self._process_state_locked(e)
+                    self._watermark = e.timestamp
+                    if self.repository:
+                        self.repository.record_checkpoint(self._checkpoint())
+                    return result
+            except Exception:
+                # Mutable model state may have advanced. Do not retry against dirty
+                # memory; a restart restores the last fully committed paper checkpoint.
+                self.failed = True
+                raise
 
     def _process_state_locked(self, e: MarketEvent) -> ProcessResult:
         if e.event_id and e.event_id in self._processed_event_ids:
@@ -550,8 +629,9 @@ class RunnerGenesisOmega:
         # Risk sizing/drawdown must see the newest point-in-time marks, not the previous
         # event's cached account equity.
         pre_trade_prices = {
-            m: float(self.store.token(m).price_usd or p.avg_entry_price)
-            for m, p in self.portfolio.account.positions.items()
+            m: float(self.store.tokens[m].price_usd)
+            for m in self.portfolio.account.positions
+            if m in self.store.tokens and self.store.tokens[m].price_usd is not None
         }
         self.portfolio.mark_to_market(pre_trade_prices)
 
@@ -625,7 +705,8 @@ class RunnerGenesisOmega:
             if immediate_fill is not None:
                 fill = immediate_fill
 
-        prices = {m: float(self.store.token(m).price_usd or p.avg_entry_price) for m, p in self.portfolio.account.positions.items()}
+        prices = {m: float(self.store.tokens[m].price_usd) for m in self.portfolio.account.positions
+                  if m in self.store.tokens and self.store.tokens[m].price_usd is not None}
         self.portfolio.mark_to_market(prices)
 
         snapshot = DecisionSnapshot(

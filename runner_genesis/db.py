@@ -1,5 +1,7 @@
 from __future__ import annotations
 from datetime import datetime
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 from typing import Any
 from sqlalchemy import create_engine, String, Float, Integer, DateTime, Boolean, Text, UniqueConstraint, select
@@ -9,6 +11,12 @@ from sqlalchemy.exc import IntegrityError
 
 class Base(DeclarativeBase):
     pass
+
+
+class RuntimeCheckpointRow(Base):
+    __tablename__ = 'runtime_checkpoints'
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload_json: Mapped[str] = mapped_column(Text)
 
 
 class EventRow(Base):
@@ -241,9 +249,60 @@ class RuntimeRepository:
 
     def __init__(self, url: str):
         self.Session = make_session_factory(url)
+        self._active_session = ContextVar('runner_repository_session', default=None)
+
+    @contextmanager
+    def _session(self):
+        active = self._active_session.get()
+        if active is not None:
+            yield active
+        else:
+            with self.Session() as session:
+                yield session
+
+    def _commit(self, session):
+        if self._active_session.get() is session:
+            session.flush()
+        else:
+            session.commit()
+
+    def _rollback(self, session):
+        if self._active_session.get() is session:
+            raise RuntimeError('Persistence conflict: atomic event rolled back; restart required')
+        session.rollback()
+
+    @contextmanager
+    def transaction(self):
+        if self._active_session.get() is not None:
+            yield
+            return
+        with self.Session.begin() as session:
+            token = self._active_session.set(session)
+            try:
+                yield
+            finally:
+                self._active_session.reset(token)
+
+    def has_event(self, event_id: str) -> bool:
+        with self._session() as s:
+            return s.execute(select(EventRow.id).where(EventRow.event_id == event_id)).first() is not None
+
+    def record_checkpoint(self, payload: dict) -> None:
+        with self._session() as s:
+            row = s.get(RuntimeCheckpointRow, 'paper')
+            if row is None:
+                s.add(RuntimeCheckpointRow(key='paper', payload_json=_json(payload)))
+            else:
+                row.payload_json = _json(payload)
+            self._commit(s)
+
+    def load_checkpoint(self) -> dict | None:
+        with self._session() as s:
+            row = s.get(RuntimeCheckpointRow, 'paper')
+            return json.loads(row.payload_json) if row is not None else None
 
     def record_event(self, e) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(EventRow(
                 event_id=e.event_id, timestamp=e.timestamp, token_mint=e.token_mint,
                 event_type=e.event_type.value, wallet=e.wallet, source=e.source,
@@ -251,12 +310,12 @@ class RuntimeRepository:
                 payload_json=e.model_dump_json(),
             ))
             try:
-                s.commit()
+                self._commit(s)
             except IntegrityError:
-                s.rollback()
+                self._rollback(s)
 
     def load_recent_event_ids(self, limit: int = 200_000) -> list[str]:
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(EventRow.event_id)
                 .order_by(EventRow.id.desc())
@@ -265,19 +324,19 @@ class RuntimeRepository:
             return [str(x) for x in reversed(rows)]
 
     def record_decision(self, d) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(DecisionRow(timestamp=d.decision_time, token_mint=d.token_mint, action=d.action, model_version=d.model_version, snapshot_json=d.model_dump_json()))
-            s.commit()
+            self._commit(s)
 
     def record_fill(self, fill) -> None:
         if fill is None:
             return
-        with self.Session() as s:
+        with self._session() as s:
             s.add(FillRow(timestamp=fill.timestamp, token_mint=fill.token_mint, side=fill.side, filled_eur=fill.filled_eur, execution_price=fill.execution_price, fees_eur=fill.fees_eur, failed=fill.failed, payload_json=_json(fill.__dict__)))
-            s.commit()
+            self._commit(s)
 
     def load_fills(self, limit: int = 100_000) -> list[dict]:
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(FillRow)
                 .order_by(FillRow.timestamp.asc(), FillRow.id.asc())
@@ -303,7 +362,7 @@ class RuntimeRepository:
 
     def record_wallet_backfill_status(self, wallet: str, last_success_at: datetime, payload: dict | None = None) -> None:
         payload = dict(payload or {})
-        with self.Session() as s:
+        with self._session() as s:
             row = s.execute(
                 select(WalletBackfillStatusRow)
                 .where(WalletBackfillStatusRow.wallet_address == str(wallet))
@@ -327,10 +386,10 @@ class RuntimeRepository:
                 row.swap_events = values['swap_events']
                 row.resolved_outcomes = values['resolved_outcomes']
                 row.payload_json = values['payload_json']
-            s.commit()
+            self._commit(s)
 
     def load_wallet_backfill_status(self, limit: int = 100_000) -> list[dict]:
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(WalletBackfillStatusRow)
                 .order_by(WalletBackfillStatusRow.last_success_at.desc(), WalletBackfillStatusRow.id.desc())
@@ -359,7 +418,9 @@ class RuntimeRepository:
         if not event_id:
             return
         event_type = getattr(getattr(e, 'event_type', None), 'value', str(getattr(e, 'event_type', 'UNKNOWN')))
-        with self.Session() as s:
+        with self._session() as s:
+            if s.execute(select(WalletTransactionRow.id).where(WalletTransactionRow.event_id == event_id)).first():
+                return
             s.add(WalletTransactionRow(
                 event_id=event_id,
                 wallet_address=str(e.wallet),
@@ -370,12 +431,12 @@ class RuntimeRepository:
                 payload_json=e.model_dump_json(),
             ))
             try:
-                s.commit()
+                self._commit(s)
             except IntegrityError:
-                s.rollback()
+                self._rollback(s)
 
     def load_wallet_transactions(self, limit: int = 500_000, wallet_address: str | None = None) -> list[dict]:
-        with self.Session() as s:
+        with self._session() as s:
             stmt = select(WalletTransactionRow)
             if wallet_address is not None:
                 stmt = stmt.where(WalletTransactionRow.wallet_address == str(wallet_address))
@@ -402,12 +463,12 @@ class RuntimeRepository:
             return out
 
     def record_wallet_metrics(self, wallet: str, observed_at: datetime, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(WalletMetricRow(wallet_address=wallet, observed_at=observed_at, payload_json=_json(payload)))
-            s.commit()
+            self._commit(s)
 
     def record_wallet_outcome(self, wallet: str, obs) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(WalletOutcomeRow(
                 wallet_address=wallet,
                 token_mint=obs.token_mint,
@@ -420,12 +481,12 @@ class RuntimeRepository:
                 payload_json=_json(obs.__dict__),
             ))
             try:
-                s.commit()
+                self._commit(s)
             except IntegrityError:
-                s.rollback()
+                self._rollback(s)
 
     def load_wallet_outcomes(self, limit: int = 100_000) -> list[dict]:
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(WalletOutcomeRow)
                 .order_by(WalletOutcomeRow.resolved_at.asc(), WalletOutcomeRow.id.asc())
@@ -443,7 +504,7 @@ class RuntimeRepository:
             } for r in rows]
 
     def record_funding_relationship(self, link) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(FundingRelationshipRow(
                 wallet_address=link.wallet,
                 funder_address=link.funder,
@@ -453,12 +514,12 @@ class RuntimeRepository:
                 payload_json=_json(link.__dict__),
             ))
             try:
-                s.commit()
+                self._commit(s)
             except IntegrityError:
-                s.rollback()
+                self._rollback(s)
 
     def load_funding_relationships(self, limit: int = 100_000) -> list[dict]:
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(FundingRelationshipRow)
                 .order_by(FundingRelationshipRow.observed_at.asc(), FundingRelationshipRow.id.asc())
@@ -473,18 +534,18 @@ class RuntimeRepository:
             } for r in rows]
 
     def record_smart_state(self, mint: str, observed_at: datetime, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(SmartTokenStateRow(token_mint=mint, observed_at=observed_at, state=str(payload.get('smart_capital_state') or 'UNKNOWN'), payload_json=_json(payload)))
-            s.commit()
+            self._commit(s)
 
     def record_wallet_position(self, wallet: str, mint: str, observed_at: datetime, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(WalletPositionRow(wallet_address=wallet, token_mint=mint, observed_at=observed_at, state=str(payload.get('state') or 'UNKNOWN'), payload_json=_json(payload)))
-            s.commit()
+            self._commit(s)
 
     def load_latest_wallet_positions(self, limit: int = 100_000) -> list[dict]:
         """Return the newest persisted Smart-Capital position snapshot per wallet+mint."""
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(WalletPositionRow)
                 .order_by(WalletPositionRow.observed_at.desc(), WalletPositionRow.id.desc())
@@ -512,7 +573,7 @@ class RuntimeRepository:
 
     def load_latest_smart_states(self, limit: int = 100_000) -> list[dict]:
         """Return the newest persisted Smart-Capital token state per mint."""
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(SmartTokenStateRow)
                 .order_by(SmartTokenStateRow.observed_at.desc(), SmartTokenStateRow.id.desc())
@@ -537,29 +598,29 @@ class RuntimeRepository:
             return out
 
     def record_actor_cluster(self, mint: str, observed_at: datetime, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(ActorClusterRow(token_mint=mint, observed_at=observed_at, payload_json=_json(payload)))
-            s.commit()
+            self._commit(s)
 
     def record_transition(self, tr) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(StateTransitionRow(token_mint=tr.token_mint, timestamp=tr.timestamp, old_state=tr.old_state, new_state=tr.new_state, reason=tr.reason, payload_json=_json(tr.metrics_snapshot)))
-            s.commit()
+            self._commit(s)
 
     def record_leaderboard(self, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             row = LeaderboardSnapshotRow(
                 wallet_address=str(payload['wallet_address']), source=str(payload.get('source') or 'PUMP_OFFICIAL'),
                 observed_at=payload['observed_at'], rank=payload.get('rank'), monthly_pnl=payload.get('monthly_pnl'), payload_json=_json(payload),
             )
             s.add(row)
             try:
-                s.commit()
+                self._commit(s)
             except IntegrityError:
-                s.rollback()
+                self._rollback(s)
 
     def load_leaderboard_snapshots(self, limit: int = 100_000) -> list[dict]:
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(LeaderboardSnapshotRow)
                 .order_by(LeaderboardSnapshotRow.observed_at.asc(), LeaderboardSnapshotRow.id.asc())
@@ -582,35 +643,35 @@ class RuntimeRepository:
             return out
 
     def record_discovery(self, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(DiscoveryObservationRow(
                 token_mint=payload.get('token_mint'), wallet_address=payload.get('wallet_address'),
                 observed_at=payload['observed_at'], source=str(payload.get('source') or 'UNKNOWN'),
                 kind=str(payload.get('kind') or 'OBSERVATION'), payload_json=_json(payload),
             ))
-            s.commit()
+            self._commit(s)
 
     def record_rollout(self, mint: str, observed_at: datetime, payload: dict) -> None:
         if payload.get('mirofish_status') != 'SIMULATION':
             return
-        with self.Session() as s:
+        with self._session() as s:
             s.add(RolloutSummaryRow(token_mint=mint, observed_at=observed_at, model='MIROFISH', payload_json=_json(payload)))
-            s.commit()
+            self._commit(s)
 
     def record_paper_update(self, mint: str, observed_at: datetime, update_type: str, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(PaperTradeUpdateRow(token_mint=mint, observed_at=observed_at, update_type=update_type, payload_json=_json(payload)))
-            s.commit()
+            self._commit(s)
 
     def load_paper_updates(self, limit: int = 100_000) -> list[dict]:
-        with self.Session() as s:
+        with self._session() as s:
             rows = s.execute(
                 select(PaperTradeUpdateRow)
-                .order_by(PaperTradeUpdateRow.observed_at.asc(), PaperTradeUpdateRow.id.asc())
+                .order_by(PaperTradeUpdateRow.observed_at.desc(), PaperTradeUpdateRow.id.desc())
                 .limit(max(1, int(limit)))
             ).scalars().all()
             out = []
-            for r in rows:
+            for r in reversed(rows):
                 try:
                     payload = json.loads(r.payload_json) if r.payload_json else {}
                 except Exception:
@@ -624,26 +685,26 @@ class RuntimeRepository:
             return out
 
     def record_backtest_run(self, run_id: str, created_at: datetime, variant: str, payload: dict, dataset_id: str | None = None) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(BacktestRunRow(run_id=run_id, created_at=created_at, variant=variant, dataset_id=dataset_id, payload_json=_json(payload)))
-            s.commit()
+            self._commit(s)
 
     def record_backtest_metrics(self, run_id: str, metrics: dict, slice_key: str | None = None) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             for name, value in metrics.items():
                 numeric = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
                 s.add(BacktestMetricRow(run_id=run_id, metric_name=str(name), metric_value=numeric, slice_key=slice_key, payload_json=_json({"value": value})))
-            s.commit()
+            self._commit(s)
 
     def record_model_version(self, model_name: str, model_version: str, created_at: datetime, status: str, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(ModelVersionRow(model_name=model_name, model_version=model_version, created_at=created_at, status=status, payload_json=_json(payload)))
             try:
-                s.commit()
+                self._commit(s)
             except IntegrityError:
-                s.rollback()
+                self._rollback(s)
 
     def record_experiment(self, experiment_id: str, created_at: datetime, variant: str, payload: dict) -> None:
-        with self.Session() as s:
+        with self._session() as s:
             s.add(ExperimentResultRow(experiment_id=experiment_id, created_at=created_at, variant=variant, payload_json=_json(payload)))
-            s.commit()
+            self._commit(s)

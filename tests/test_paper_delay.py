@@ -18,6 +18,7 @@ def test_entry_executes_only_at_or_after_configured_delay(tmp_path, monkeypatch)
     eng.pending_orders['M'] = PendingPaperOrder(prop, t0, due, {})
     fill, reasons = eng._execute_due_pending('M', due-timedelta(seconds=1), token, {'entry_validity':'VALID','sellability_score':1.0,'manipulation_risk':0.0})
     assert fill is None and 'M' in eng.pending_orders
+    token = eng.store.apply(MarketEvent(event_id='p1', timestamp=due, token_mint='M', event_type=EventType.PRICE, price_usd=1.1, liquidity_usd=100_000))
     fill, reasons = eng._execute_due_pending('M', due, token, {'entry_validity':'VALID','sellability_score':1.0,'manipulation_risk':0.0})
     assert fill is not None
     assert 'M' not in eng.pending_orders

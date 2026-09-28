@@ -7,6 +7,7 @@ class PortfolioLedger:
     def __init__(self, starting_cash_eur: float):
         self.account = PaperAccount(starting_cash_eur, starting_cash_eur)
         self.fills: list[PaperFill] = []
+        self.marks: dict[str, float] = {}
 
     def apply_fill(self, fill: PaperFill) -> bool:
         self.account.advance_accounting_day(fill.timestamp)
@@ -97,7 +98,9 @@ class PortfolioLedger:
 
     def mark_to_market(self, prices: dict[str, float]):
         a = self.account
-        pos = sum(p.quantity * float(prices.get(m, p.avg_entry_price)) for m, p in a.positions.items())
+        self.marks.update(prices)
+        self.marks = {m: self.marks[m] for m in a.positions if m in self.marks}
+        pos = sum(p.quantity * float(self.marks.get(m, p.avg_entry_price)) for m, p in a.positions.items())
         a.equity_eur = a.cash_eur + pos
         a.peak_equity_eur = max(a.peak_equity_eur, a.equity_eur)
         return a.equity_eur
