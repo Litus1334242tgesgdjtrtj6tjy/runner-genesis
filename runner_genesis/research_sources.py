@@ -179,6 +179,9 @@ class WalletResearchBackfillService:
 
         added = store.backfill_wallet_observations(bundle.wallet, bundle.outcomes) if bundle.outcomes else 0
         if self.repository:
+            for event in bundle.events:
+                if hasattr(self.repository, "record_wallet_transaction"):
+                    self.repository.record_wallet_transaction(event)
             for link in bundle.funding_links:
                 self.repository.record_funding_relationship(link)
             for obs in bundle.outcomes:
