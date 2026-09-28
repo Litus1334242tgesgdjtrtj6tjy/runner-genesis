@@ -374,10 +374,13 @@ class RuntimeRepository:
             except IntegrityError:
                 s.rollback()
 
-    def load_wallet_transactions(self, limit: int = 500_000) -> list[dict]:
+    def load_wallet_transactions(self, limit: int = 500_000, wallet_address: str | None = None) -> list[dict]:
         with self.Session() as s:
+            stmt = select(WalletTransactionRow)
+            if wallet_address is not None:
+                stmt = stmt.where(WalletTransactionRow.wallet_address == str(wallet_address))
             rows = s.execute(
-                select(WalletTransactionRow)
+                stmt
                 .order_by(WalletTransactionRow.timestamp.asc(), WalletTransactionRow.id.asc())
                 .limit(max(1, int(limit)))
             ).scalars().all()
