@@ -1,0 +1,35 @@
+# EARLY_RUNNER_V2 — candidate configuration for SHADOW/PAPER only.
+# DO NOT enable live trading from this file.
+shadow_only: true
+
+detector_heat_min: 80.0
+detector_heat_high: 99.0
+detector_buy_ratio_min: 0.70
+sanity_rejections_quarantine: 5000
+
+blocked_runner_phases:
+  - EXTENDED
+established_runner_extension_block: 35.0
+
+entry_wait_max_seconds: 180
+entry_heat_floor: 50.0
+entry_buy_ratio_floor: 0.60
+max_spread_bps: 100.0
+max_book_age_ms: 1800
+min_book_total_usd: 6000
+
+invalidation_heat_max: 35.0
+invalidation_buy_ratio_max: 0.50
+invalidation_consecutive_samples: 2
+
+no_development_seconds: 2700
+max_position_seconds: 3600
+no_development_mfe_pct: 2.0
+
+protection_activation_mfe_pct: 2.0
+protection_retrace_fraction: 0.40
+protection_min_locked_pct: 0.50
+protection_raise_step_pct: 0.50
+
+hold_message_interval_seconds: 600
+cooldown_seconds: 600
